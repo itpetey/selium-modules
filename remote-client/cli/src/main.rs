@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use futures::{StreamExt, pin_mut};
-use selium_abi::{AbiParam, AbiScalarType, AbiScalarValue, Capability};
+use selium_remote_client::{AbiParam, AbiScalarType, AbiScalarValue, AbiSignature, Capability};
 use selium_remote_client::{ClientConfigBuilder, ClientError, Process, ProcessBuilder};
 use selium_userland::fbs::selium::logging::{self as log_fb, LogLevel};
 use tracing::field::Empty;
@@ -71,7 +71,7 @@ struct StartArgs {
     #[arg(short, long, value_enum)]
     result: Vec<ParamKind>,
     /// Arguments matching the declared params, supplied in order. Accepts `TYPE:VALUE` to infer the param list.
-    /// For `buffer` parameters, prefix the value with `hex:` to pass arbitrary bytes (useful for rkyv payloads).
+    /// For `buffer` parameters, prefix the value with `hex:` to pass arbitrary bytes.
     #[arg(short, long, value_parser = parse_argument, value_name = "VALUE|TYPE:VALUE")]
     arg: Vec<Argument>,
     /// Attach to the process logging stream after launch.
@@ -270,10 +270,10 @@ async fn stop(domain: &str, port: u16, cert_dir: &Path, id: u64) -> Result<()> {
     Ok(())
 }
 
-fn build_signature(params: &[ParamKind], results: &[ParamKind]) -> selium_abi::AbiSignature {
+fn build_signature(params: &[ParamKind], results: &[ParamKind]) -> AbiSignature {
     let params = params.iter().map(map_param).collect();
     let results = results.iter().map(map_param).collect();
-    selium_abi::AbiSignature::new(params, results)
+    AbiSignature::new(params, results)
 }
 
 fn map_param(kind: &ParamKind) -> AbiParam {
@@ -548,7 +548,7 @@ fn render_log(record: log_fb::LogRecord<'_>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use selium_abi::{AbiParam, AbiScalarType};
+    use selium_remote_client::{AbiParam, AbiScalarType};
 
     #[test]
     fn parse_argument_recognises_string_prefix() {

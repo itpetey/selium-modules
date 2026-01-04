@@ -1,0 +1,159 @@
+// Flatbuffers schema for the remote-client control plane.
+namespace remote_client.protocol;
+
+enum Capability: ubyte {
+  SessionLifecycle = 0,
+  ChannelLifecycle = 1,
+  ChannelReader = 2,
+  ChannelWriter = 3,
+  ProcessLifecycle = 4,
+  NetBind = 5,
+  NetAccept = 6,
+  NetConnect = 7,
+  NetRead = 8,
+  NetWrite = 9
+}
+
+enum AbiScalarType: ubyte {
+  I8 = 0,
+  U8 = 1,
+  I16 = 2,
+  U16 = 3,
+  I32 = 4,
+  U32 = 5,
+  I64 = 6,
+  U64 = 7,
+  F32 = 8,
+  F64 = 9
+}
+
+enum AbiParamKind: ubyte {
+  Scalar = 0,
+  Buffer = 1
+}
+
+enum ChannelRefKind: ubyte {
+  Strong = 0,
+  Shared = 1
+}
+
+enum EntrypointArgKind: ubyte {
+  Scalar = 0,
+  Buffer = 1,
+  Resource = 2
+}
+
+table AbiParam {
+  kind: AbiParamKind;
+  scalar_type: AbiScalarType;
+}
+
+table AbiSignature {
+  params: [AbiParam];
+  results: [AbiParam];
+}
+
+table ScalarValue {
+  kind: AbiScalarType;
+  bits: ulong;
+}
+
+table EntrypointArg {
+  kind: EntrypointArgKind;
+  scalar: ScalarValue;
+  buffer: [ubyte];
+  resource: ulong;
+}
+
+table ChannelRef {
+  kind: ChannelRefKind;
+  handle: ulong;
+}
+
+table IoFrame {
+  writer_id: ushort;
+  payload: [ubyte];
+}
+
+table ProcessStartRequest {
+  module_id: string;
+  entrypoint: string;
+  capabilities: [Capability];
+  signature: AbiSignature;
+  args: [EntrypointArg];
+}
+
+table ChannelCreateRequest {
+  capacity: uint;
+}
+
+table ChannelDeleteRequest {
+  handle: ulong;
+}
+
+table SubscribeRequest {
+  target: ChannelRef;
+  chunk_size: uint;
+}
+
+table PublishRequest {
+  handle: ulong;
+}
+
+table ProcessStopRequest {
+  handle: ulong;
+}
+
+table ProcessLogChannelRequest {
+  handle: ulong;
+}
+
+table ChannelCreateResponse {
+  handle: ulong;
+}
+
+table ChannelReadResponse {
+  frame: IoFrame;
+}
+
+table ChannelWriteResponse {
+  len: uint;
+}
+
+table ProcessStartResponse {
+  handle: ulong;
+}
+
+table ProcessLogChannelResponse {
+  handle: ulong;
+}
+
+table OkResponse {}
+
+table ErrorResponse {
+  message: string;
+}
+
+union RemoteClientPayload {
+  ChannelCreateRequest,
+  ChannelDeleteRequest,
+  SubscribeRequest,
+  PublishRequest,
+  ProcessStartRequest,
+  ProcessStopRequest,
+  ProcessLogChannelRequest,
+  ChannelCreateResponse,
+  ChannelReadResponse,
+  ChannelWriteResponse,
+  ProcessStartResponse,
+  ProcessLogChannelResponse,
+  OkResponse,
+  ErrorResponse
+}
+
+table RemoteClientMessage {
+  payload: RemoteClientPayload;
+}
+
+root_type RemoteClientMessage;
+file_identifier "RMCL";

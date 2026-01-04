@@ -5,8 +5,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
 use selium_atlas_protocol::{
-    AtlasId, Message, ProtocolError,
-    decode_message, encode_message,
+    AtlasId, Message, ProtocolError, decode_message, encode_message,
     uri::{Uri, UriError},
 };
 use selium_userland::{
@@ -91,10 +90,7 @@ impl AtlasService {
                 uri,
                 id,
                 reply_channel,
-            } => {
-                self.handle_insert(request_id, uri, id, reply_channel)
-                    .await
-            }
+            } => self.handle_insert(request_id, uri, id, reply_channel).await,
             Message::RemoveRequest {
                 request_id,
                 uri,

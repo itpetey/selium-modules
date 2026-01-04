@@ -18,7 +18,6 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive", "env", "help", "std"] }
 futures = { workspace = true, features = ["alloc", "std"] }
-selium-abi = { workspace = true }
 selium-remote-client = { path = "../client" }
 selium-userland = { workspace = true }
 tokio = { workspace = true, features = [

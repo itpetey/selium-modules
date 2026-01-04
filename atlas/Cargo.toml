@@ -19,14 +19,7 @@ flatbuffers = { version = "25.12", default-features = false }
 flatbuffers-build = { version = "0.2", default-features = false }
 flatc = { git = "https://github.com/petehayes102/flatc.rs", branch = "v25.12.19" }
 futures = { version = "0.3", default-features = false }
-pin-project = { version = "1.1", default-features = false }
-quinn = { version = "0.11", default-features = false }
-rkyv = { version = "0.8", default-features = false }
-rustls = { version = "0.23", default-features = false }
-rustls-pki-types = { version = "1.13", default-features = false }
-selium-abi = { path = "../../../selium/switchboard/system/abi" }
 selium-userland = { path = "../../../selium/switchboard/system/userland" }
 thiserror = { version = "2.0", default-features = false }
-tokio = { version = "1.48", default-features = false }
 tracing = { version = "0.1", default-features = false }
 url = { version = "2.5", default-features = false }

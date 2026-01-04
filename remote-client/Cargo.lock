@@ -717,7 +717,6 @@ dependencies = [
  "anyhow",
  "clap",
  "futures",
- "selium-abi",
  "selium-remote-client",
  "selium-userland",
  "tokio",
@@ -731,13 +730,22 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "quinn",
- "rkyv",
  "rustls",
  "rustls-pki-types",
- "selium-abi",
+ "selium-remote-client-protocol",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "selium-remote-client-protocol"
+version = "0.1.0"
+dependencies = [
+ "flatbuffers",
+ "flatbuffers-build",
+ "flatc",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -746,7 +754,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
- "rkyv",
+ "selium-remote-client-protocol",
  "selium-userland",
  "tracing",
 ]

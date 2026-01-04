@@ -32,6 +32,11 @@
 //! }
 //! ```
 #![deny(missing_docs)]
+/// Protocol types shared with the remote client control plane.
+pub use selium_remote_client_protocol::{
+    AbiParam, AbiScalarType, AbiScalarValue, AbiSignature, Capability, EntrypointArg,
+    GuestResourceId, GuestUint,
+};
 use std::{
     collections::VecDeque,
     fmt::{Debug, Display},
@@ -50,15 +55,13 @@ use quinn::{
     ClientConfig, ConnectError, Connection, ConnectionError, Endpoint, RecvStream, SendStream,
     TransportConfig, WriteError, crypto::rustls::QuicClientConfig, rustls,
 };
-use rkyv::{Archive, Deserialize, Serialize};
 use rustls::{
     RootCertStore,
     pki_types::{CertificateDer, PrivateKeyDer},
 };
 use rustls_pki_types::{PrivatePkcs1KeyDer, PrivatePkcs8KeyDer, pem::SliceIter};
-use selium_abi::{
-    AbiScalarValue, AbiSignature, Capability, EntrypointArg, EntrypointInvocation, GuestResourceId,
-    GuestUint, IoFrame, RkyvEncode, decode_rkyv, encode_rkyv,
+use selium_remote_client_protocol::{
+    ChannelRef, ProcessStartRequest, Request, Response, decode_response, encode_request,
 };
 use thiserror::Error;
 use tokio::net::lookup_host;
@@ -166,47 +169,6 @@ pub struct Process {
 /// Configures a process to be launched in the runtime.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProcessBuilder {
-    module_id: String,
-    entrypoint: String,
-    capabilities: Vec<Capability>,
-    signature: AbiSignature,
-    args: Vec<EntrypointArg>,
-}
-
-#[derive(Debug, Archive, Serialize, Deserialize)]
-#[rkyv(bytecheck())]
-enum Request {
-    ChannelCreate(GuestUint),
-    ChannelDelete(GuestResourceId),
-    Subscribe(ChannelRef, GuestUint),
-    Publish(GuestResourceId),
-    ProcessStart(ProcessStartRequest),
-    ProcessStop(GuestResourceId),
-    ProcessLogChannel(GuestResourceId),
-}
-
-#[derive(Debug, Archive, Serialize, Deserialize)]
-#[rkyv(bytecheck())]
-enum Response {
-    ChannelCreate(GuestResourceId),
-    ChannelRead(IoFrame),
-    ChannelWrite(GuestUint),
-    ProcessStart(GuestResourceId),
-    ProcessLogChannel(GuestResourceId),
-    Ok,
-    Error(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Archive, Serialize, Deserialize)]
-#[rkyv(bytecheck())]
-enum ChannelRef {
-    Strong(GuestResourceId),
-    Shared(GuestResourceId),
-}
-
-#[derive(Debug, Clone, PartialEq, Archive, Serialize, Deserialize)]
-#[rkyv(bytecheck())]
-struct ProcessStartRequest {
     module_id: String,
     entrypoint: String,
     capabilities: Vec<Capability>,
@@ -338,7 +300,8 @@ impl Client {
 
     async fn request(&self, request: Request) -> Result<Response> {
         let mut session = self.open_session().await?;
-        let payload = encode_rkyv(&request).map_err(|err| ClientError::Encode(err.to_string()))?;
+        let payload =
+            encode_request(&request).map_err(|err| ClientError::Encode(err.to_string()))?;
         debug!("sending request of {} bytes", payload.len());
         session
             .send
@@ -442,7 +405,7 @@ impl Channel {
         let mut session = self.client.open_session().await?;
         let chunk_size = GuestUint::try_from(chunk_size)
             .map_err(|_| ClientError::InvalidArgument("chunk size exceeds u32::MAX"))?;
-        let payload = encode_rkyv(&Request::Subscribe(target, chunk_size))
+        let payload = encode_request(&Request::Subscribe(target, chunk_size))
             .map_err(|err| ClientError::Encode(err.to_string()))?;
         session
             .send
@@ -484,7 +447,7 @@ impl Channel {
     /// ```
     pub async fn publish(&self) -> Result<Publisher> {
         let mut session = self.client.open_session().await?;
-        let payload = encode_rkyv(&Request::Publish(self.handle))
+        let payload = encode_request(&Request::Publish(self.handle))
             .map_err(|err| ClientError::Encode(err.to_string()))?;
         session
             .send
@@ -549,28 +512,6 @@ impl ProcessBuilder {
         self.arg_buffer(value.into().into_bytes())
     }
 
-    /// Append an rkyv-encoded argument.
-    ///
-    /// # Examples
-    /// ```no_run
-    /// use rkyv::{Archive, Deserialize, Serialize};
-    ///
-    /// #[derive(Archive, Deserialize, Serialize)]
-    /// struct Args {
-    ///     value: u32,
-    /// }
-    ///
-    /// # fn example() -> Result<(), selium_remote_client::ClientError> {
-    /// let _builder = selium_remote_client::ProcessBuilder::new("module", "entry")
-    ///     .arg_rkyv(&Args { value: 42 })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn arg_rkyv<T: RkyvEncode>(self, value: &T) -> Result<Self> {
-        let bytes = encode_rkyv(value).map_err(|err| ClientError::Encode(err.to_string()))?;
-        Ok(self.arg_buffer(bytes))
-    }
-
     /// Append a raw buffer argument.
     pub fn arg_buffer(mut self, value: impl Into<Vec<u8>>) -> Self {
         self.args.push(EntrypointArg::Buffer(value.into()));
@@ -584,17 +525,41 @@ impl ProcessBuilder {
     }
 
     fn build_request(self) -> Result<ProcessStartRequest> {
-        let entrypoint = EntrypointInvocation::new(self.signature.clone(), self.args.clone())
-            .map_err(|_| ClientError::InvalidArgument("arguments do not satisfy the signature"))?;
+        validate_entrypoint_args(&self.signature, &self.args)?;
 
         Ok(ProcessStartRequest {
             module_id: self.module_id,
             entrypoint: self.entrypoint,
             capabilities: self.capabilities,
-            signature: entrypoint.signature().clone(),
-            args: entrypoint.args,
+            signature: self.signature,
+            args: self.args,
         })
     }
+}
+
+fn validate_entrypoint_args(signature: &AbiSignature, args: &[EntrypointArg]) -> Result<()> {
+    if signature.params().len() != args.len() {
+        return Err(ClientError::InvalidArgument(
+            "arguments do not satisfy the signature",
+        ));
+    }
+
+    for (param, arg) in signature.params().iter().zip(args.iter()) {
+        match (param, arg) {
+            (AbiParam::Scalar(expected), EntrypointArg::Scalar(actual))
+                if actual.kind() == *expected => {}
+            (AbiParam::Scalar(AbiScalarType::I32), EntrypointArg::Resource(_)) => {}
+            (AbiParam::Scalar(AbiScalarType::U64), EntrypointArg::Resource(_)) => {}
+            (AbiParam::Buffer, EntrypointArg::Buffer(_)) => {}
+            _ => {
+                return Err(ClientError::InvalidArgument(
+                    "arguments do not satisfy the signature",
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 impl Process {
@@ -852,7 +817,7 @@ async fn read_response(
     buffer: &mut VecDeque<u8>,
 ) -> Result<Response> {
     let payload = read_response_frame(recv, limit, buffer).await?;
-    decode_rkyv::<Response>(&payload).map_err(|err| ClientError::Decode(err.to_string()))
+    decode_response(&payload).map_err(|err| ClientError::Decode(err.to_string()))
 }
 
 async fn read_response_once(
@@ -995,8 +960,8 @@ mod tests {
     #[test]
     fn request_round_trips() {
         let req = Request::ChannelCreate(64 * 1024);
-        let encoded = encode_rkyv(&req).expect("encode");
-        let decoded = decode_rkyv::<Request>(&encoded).expect("decode");
+        let encoded = encode_request(&req).expect("encode");
+        let decoded = selium_remote_client_protocol::decode_request(&encoded).expect("decode");
         match decoded {
             Request::ChannelCreate(capacity) => assert_eq!(capacity, 64 * 1024),
             other => panic!("unexpected variant: {other:?}"),

@@ -17,6 +17,6 @@ crate-type = ["cdylib"]
 [dependencies]
 anyhow = { workspace = true }
 futures = { workspace = true, features = ["std"] }
-rkyv = { workspace = true }
+selium-remote-client-protocol = { path = "../protocol" }
 selium-userland = { workspace = true }
 tracing = { workspace = true, features = ["attributes"] }

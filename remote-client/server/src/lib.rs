@@ -2,13 +2,12 @@ use std::future::ready;
 
 use anyhow::{Result, anyhow};
 use futures::{SinkExt, StreamExt, TryFutureExt};
-use rkyv::{Archive, Deserialize, Serialize};
+use selium_remote_client_protocol::{
+    self as protocol, ChannelRef, ProcessStartRequest, Request, Response, decode_request,
+    encode_response,
+};
 use selium_userland::{
-    abi::{
-        AbiSignature, Capability, EntrypointArg, GuestResourceId, GuestUint, IoFrame, decode_rkyv,
-        encode_rkyv,
-    },
-    entrypoint,
+    abi as userland_abi, entrypoint,
     io::{Channel, SharedChannel},
     net::{Connection, Listener, NetError, Reader, Writer},
     process::{ProcessBuilder, ProcessHandle},
@@ -18,52 +17,11 @@ use tracing::{debug, error, instrument, warn};
 /// Maximum number of incoming connections we can handle concurrently.
 const MAX_CLIENTS: usize = 1000;
 /// Capabilities a remote client is permitted to request for a started process.
-const ALLOWED_PROCESS_CAPABILITIES: &[Capability] = &[
-    Capability::ChannelLifecycle,
-    Capability::ChannelReader,
-    Capability::ChannelWriter,
+const ALLOWED_PROCESS_CAPABILITIES: &[protocol::Capability] = &[
+    protocol::Capability::ChannelLifecycle,
+    protocol::Capability::ChannelReader,
+    protocol::Capability::ChannelWriter,
 ];
-
-#[derive(Debug, Clone, PartialEq, Archive, Serialize, Deserialize)]
-#[rkyv(bytecheck())]
-enum Request {
-    ChannelCreate(GuestUint),
-    ChannelDelete(GuestResourceId),
-    Subscribe(ChannelRef, GuestUint),
-    Publish(GuestResourceId),
-    ProcessStart(ProcessStartRequest),
-    ProcessStop(GuestResourceId),
-    ProcessLogChannel(GuestResourceId),
-}
-
-#[derive(Debug, Clone, PartialEq, Archive, Serialize, Deserialize)]
-#[rkyv(bytecheck())]
-enum Response {
-    ChannelCreate(GuestResourceId),
-    ChannelRead(IoFrame),
-    ChannelWrite(GuestUint),
-    ProcessStart(GuestResourceId),
-    ProcessLogChannel(GuestResourceId),
-    Ok,
-    Error(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Archive, Serialize, Deserialize)]
-#[rkyv(bytecheck())]
-enum ChannelRef {
-    Strong(GuestResourceId),
-    Shared(GuestResourceId),
-}
-
-#[derive(Debug, Clone, PartialEq, Archive, Serialize, Deserialize)]
-#[rkyv(bytecheck())]
-struct ProcessStartRequest {
-    module_id: String,
-    entrypoint: String,
-    capabilities: Vec<Capability>,
-    signature: AbiSignature,
-    args: Vec<EntrypointArg>,
-}
 
 #[entrypoint]
 #[instrument(name = "start")]
@@ -100,8 +58,12 @@ async fn handle_conn(mut conn: Connection) {
 }
 
 #[instrument(skip_all, fields(request_id = req.writer_id, reader_id = reader.handle(), writer_id = writer.handle()))]
-async fn handle_req(req: IoFrame, reader: &mut Reader, writer: &mut Writer) -> Result<()> {
-    let request = match decode_rkyv::<Request>(&req.payload) {
+async fn handle_req(
+    req: userland_abi::IoFrame,
+    reader: &mut Reader,
+    writer: &mut Writer,
+) -> Result<()> {
+    let request = match decode_request(&req.payload) {
         Ok(r) => r,
         Err(e) => {
             debug!(error = ?e, "could not decode request");
@@ -186,7 +148,7 @@ async fn dispatch(request: Request, reader: &mut Reader, writer: &mut Writer) ->
 async fn send(response: Response, writer: &mut Writer) -> Result<()> {
     debug!("sending reply");
 
-    let encoded = encode_rkyv(&response).map_err(|e| anyhow!(e))?;
+    let encoded = encode_response(&response).map_err(|e| anyhow!(e))?;
     let framed = prefix_frame(encoded).map_err(|e| anyhow!(e))?;
     writer.send(framed).await?;
     Ok(())
@@ -201,27 +163,34 @@ fn prefix_frame(payload: Vec<u8>) -> Result<Vec<u8>, NetError> {
 }
 
 async fn start_process(request: ProcessStartRequest) -> Result<ProcessHandle> {
-    ensure_permitted_capabilities(&request.capabilities)?;
+    let ProcessStartRequest {
+        module_id,
+        entrypoint,
+        capabilities,
+        signature,
+        args,
+    } = request;
 
-    let builder = request.capabilities.iter().fold(
-        ProcessBuilder::new(request.module_id, request.entrypoint).signature(request.signature),
-        |builder, capability| builder.capability(*capability),
+    ensure_permitted_capabilities(&capabilities)?;
+
+    let signature = map_signature(&signature);
+    let builder = capabilities.iter().fold(
+        ProcessBuilder::new(module_id, entrypoint).signature(signature),
+        |builder, capability| builder.capability(map_capability(*capability)),
     );
 
-    request
-        .args
-        .iter()
+    args.iter()
         .fold(builder, |builder, arg| match arg {
-            EntrypointArg::Scalar(value) => builder.arg_scalar(*value),
-            EntrypointArg::Buffer(bytes) => builder.arg_buffer(bytes.clone()),
-            EntrypointArg::Resource(handle) => builder.arg_resource(*handle),
+            protocol::EntrypointArg::Scalar(value) => builder.arg_scalar(map_scalar_value(*value)),
+            protocol::EntrypointArg::Buffer(bytes) => builder.arg_buffer(bytes.clone()),
+            protocol::EntrypointArg::Resource(handle) => builder.arg_resource(*handle),
         })
         .start()
         .await
         .map_err(|e| anyhow!(e))
 }
 
-fn ensure_permitted_capabilities(capabilities: &[Capability]) -> Result<()> {
+fn ensure_permitted_capabilities(capabilities: &[protocol::Capability]) -> Result<()> {
     if let Some(capability) = capabilities
         .iter()
         .find(|capability| !ALLOWED_PROCESS_CAPABILITIES.contains(capability))
@@ -230,4 +199,62 @@ fn ensure_permitted_capabilities(capabilities: &[Capability]) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn map_capability(capability: protocol::Capability) -> userland_abi::Capability {
+    match capability {
+        protocol::Capability::SessionLifecycle => userland_abi::Capability::SessionLifecycle,
+        protocol::Capability::ChannelLifecycle => userland_abi::Capability::ChannelLifecycle,
+        protocol::Capability::ChannelReader => userland_abi::Capability::ChannelReader,
+        protocol::Capability::ChannelWriter => userland_abi::Capability::ChannelWriter,
+        protocol::Capability::ProcessLifecycle => userland_abi::Capability::ProcessLifecycle,
+        protocol::Capability::NetBind => userland_abi::Capability::NetBind,
+        protocol::Capability::NetAccept => userland_abi::Capability::NetAccept,
+        protocol::Capability::NetConnect => userland_abi::Capability::NetConnect,
+        protocol::Capability::NetRead => userland_abi::Capability::NetRead,
+        protocol::Capability::NetWrite => userland_abi::Capability::NetWrite,
+    }
+}
+
+fn map_signature(signature: &protocol::AbiSignature) -> userland_abi::AbiSignature {
+    let params = signature.params().iter().copied().map(map_param).collect();
+    let results = signature.results().iter().copied().map(map_param).collect();
+    userland_abi::AbiSignature::new(params, results)
+}
+
+fn map_param(param: protocol::AbiParam) -> userland_abi::AbiParam {
+    match param {
+        protocol::AbiParam::Scalar(kind) => userland_abi::AbiParam::Scalar(map_scalar_type(kind)),
+        protocol::AbiParam::Buffer => userland_abi::AbiParam::Buffer,
+    }
+}
+
+fn map_scalar_type(kind: protocol::AbiScalarType) -> userland_abi::AbiScalarType {
+    match kind {
+        protocol::AbiScalarType::I8 => userland_abi::AbiScalarType::I8,
+        protocol::AbiScalarType::U8 => userland_abi::AbiScalarType::U8,
+        protocol::AbiScalarType::I16 => userland_abi::AbiScalarType::I16,
+        protocol::AbiScalarType::U16 => userland_abi::AbiScalarType::U16,
+        protocol::AbiScalarType::I32 => userland_abi::AbiScalarType::I32,
+        protocol::AbiScalarType::U32 => userland_abi::AbiScalarType::U32,
+        protocol::AbiScalarType::I64 => userland_abi::AbiScalarType::I64,
+        protocol::AbiScalarType::U64 => userland_abi::AbiScalarType::U64,
+        protocol::AbiScalarType::F32 => userland_abi::AbiScalarType::F32,
+        protocol::AbiScalarType::F64 => userland_abi::AbiScalarType::F64,
+    }
+}
+
+fn map_scalar_value(value: protocol::AbiScalarValue) -> userland_abi::AbiScalarValue {
+    match value {
+        protocol::AbiScalarValue::I8(val) => userland_abi::AbiScalarValue::I8(val),
+        protocol::AbiScalarValue::U8(val) => userland_abi::AbiScalarValue::U8(val),
+        protocol::AbiScalarValue::I16(val) => userland_abi::AbiScalarValue::I16(val),
+        protocol::AbiScalarValue::U16(val) => userland_abi::AbiScalarValue::U16(val),
+        protocol::AbiScalarValue::I32(val) => userland_abi::AbiScalarValue::I32(val),
+        protocol::AbiScalarValue::U32(val) => userland_abi::AbiScalarValue::U32(val),
+        protocol::AbiScalarValue::I64(val) => userland_abi::AbiScalarValue::I64(val),
+        protocol::AbiScalarValue::U64(val) => userland_abi::AbiScalarValue::U64(val),
+        protocol::AbiScalarValue::F32(val) => userland_abi::AbiScalarValue::F32(val),
+        protocol::AbiScalarValue::F64(val) => userland_abi::AbiScalarValue::F64(val),
+    }
 }
