@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["client", "core", "protocol", "server"]
+members = ["client", "core", "protocol", "server", "tests/request-reply"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,12 +15,14 @@ categories = ["development-tools", "virtualization", "wasm"]
 
 [workspace.dependencies]
 anyhow = { version = "1.0", default-features = false }
+cargo = { version = "0.93", default-features = false }
 flatbuffers = { version = "25.12", default-features = false }
 flatbuffers-build = { version = "0.2", default-features = false }
 flatc = { git = "https://github.com/petehayes102/flatc.rs", branch = "v25.12.19" }
 futures = { version = "0.3", default-features = false }
 pin-project = { version = "1.1", default-features = false }
-selium-userland = { path = "../../../selium/switchboard/system/userland" }
+selium-abi = { path = "../../../selium/main/system/abi" }
+selium-userland = { path = "../../../selium/main/system/userland" }
 thiserror = { version = "2.0", default-features = false }
 tokio = { version = "1.48", default-features = false }
 tracing = { version = "0.1", default-features = false }

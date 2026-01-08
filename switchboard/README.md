@@ -24,5 +24,5 @@ The `selium-switchboard-server` component should be added to the Selium Runtime'
 ```bash
 selium-runtime \
   --work-dir /path/to/selium-runtime/work \
-  --module "path=selium_switchboard_server.wasm;capabilities=ChannelLifecycle,ChannelReader,ChannelWriter"
+  --module "path=selium_switchboard_server.wasm;capabilities=ChannelLifecycle,ChannelReader,ChannelWriter,SingletonRegistry"
 ```

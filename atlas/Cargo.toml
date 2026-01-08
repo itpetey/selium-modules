@@ -19,7 +19,7 @@ flatbuffers = { version = "25.12", default-features = false }
 flatbuffers-build = { version = "0.2", default-features = false }
 flatc = { git = "https://github.com/petehayes102/flatc.rs", branch = "v25.12.19" }
 futures = { version = "0.3", default-features = false }
-selium-userland = { path = "../../../selium/switchboard/system/userland" }
+selium-userland = { path = "../../../selium/main/system/userland" }
 thiserror = { version = "2.0", default-features = false }
 tracing = { version = "0.1", default-features = false }
 url = { version = "2.5", default-features = false }

@@ -17,7 +17,10 @@ use selium_atlas_protocol::{Message, ProtocolError, decode_message, encode_messa
 use selium_switchboard::{
     Client, Fanout, Publisher, Server, Subscriber, Switchboard, SwitchboardError,
 };
-use selium_userland::io::{Channel, DriverError, SharedChannel};
+use selium_userland::{
+    Dependency, DependencyDescriptor, dependency_id,
+    io::{Channel, DriverError, SharedChannel},
+};
 use thiserror::Error;
 use tracing::debug;
 
@@ -193,6 +196,20 @@ impl Atlas {
         response_channel.delete().await?;
 
         Ok(response)
+    }
+}
+
+impl Dependency for Atlas {
+    type Handle = SharedChannel;
+    type Error = AtlasError;
+
+    const DESCRIPTOR: DependencyDescriptor = DependencyDescriptor {
+        name: "selium::Atlas",
+        id: dependency_id!("selium.atlas.singleton"),
+    };
+
+    async fn from_handle(handle: Self::Handle) -> Result<Self, Self::Error> {
+        Atlas::attach(handle).await
     }
 }
 

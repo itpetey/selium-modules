@@ -23,6 +23,7 @@ use thiserror::Error;
 use tracing::{debug, warn};
 
 use selium_userland::{
+    Dependency, DependencyDescriptor, dependency_id,
     encoding::{FlatMsg, HasSchema},
     io::{Channel, ChannelHandle, DriverError, Reader, SharedChannel, Writer},
 };
@@ -288,6 +289,20 @@ impl Switchboard {
         self.state
             .lock()
             .map_err(|_| SwitchboardError::StateUnavailable)
+    }
+}
+
+impl Dependency for Switchboard {
+    type Handle = SharedChannel;
+    type Error = SwitchboardError;
+
+    const DESCRIPTOR: DependencyDescriptor = DependencyDescriptor {
+        name: "selium::Switchboard",
+        id: dependency_id!("selium.switchboard.singleton"),
+    };
+
+    async fn from_handle(handle: Self::Handle) -> Result<Self, Self::Error> {
+        Switchboard::attach(handle).await
     }
 }
 

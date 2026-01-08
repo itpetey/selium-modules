@@ -1,0 +1,27 @@
+[package]
+name = "selium-test-request-reply"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = { workspace = true }
+flatbuffers = { workspace = true }
+futures = { workspace = true, features = ["std"] }
+selium-abi = { workspace = true }
+selium-atlas = { path = "../../../atlas/client" }
+selium-switchboard = { path = "../../client" }
+selium-userland = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+cargo = { workspace = true, features = ["http-transport-reqwest"] }
+selium-remote-client = { path = "../../../remote-client/client" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[build-dependencies]
+flatbuffers-build = { workspace = true }
+flatc = { workspace = true }

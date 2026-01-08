@@ -160,7 +160,7 @@ where
     Rep: FlatMsg + HasSchema + Send + Unpin + 'static,
 {
     /// Create a new publisher endpoint.
-    pub async fn create(switchboard: &mut Switchboard) -> Result<Self, SwitchboardError> {
+    pub async fn create(switchboard: &Switchboard) -> Result<Self, SwitchboardError> {
         let endpoint = switchboard
             .endpoint()
             .inputs(Cardinality::Zero)
@@ -271,7 +271,7 @@ where
     Req: FlatMsg + HasSchema + Send + Unpin + 'static,
 {
     /// Create a new subscriber endpoint.
-    pub async fn create(switchboard: &mut Switchboard) -> Result<Self, SwitchboardError> {
+    pub async fn create(switchboard: &Switchboard) -> Result<Self, SwitchboardError> {
         let endpoint = switchboard
             .endpoint()
             .inputs(Cardinality::One)
@@ -348,7 +348,7 @@ where
     Rep: FlatMsg + HasSchema + Send + Unpin + 'static,
 {
     /// Create a new fanout endpoint.
-    pub async fn create(switchboard: &mut Switchboard) -> Result<Self, SwitchboardError> {
+    pub async fn create(switchboard: &Switchboard) -> Result<Self, SwitchboardError> {
         let endpoint = switchboard
             .endpoint()
             .inputs(Cardinality::Zero)
@@ -456,7 +456,7 @@ where
     Rep: FlatMsg + HasSchema + Send + Unpin + 'static,
 {
     /// Create a new server endpoint.
-    pub async fn create(switchboard: &mut Switchboard) -> Result<Self, SwitchboardError> {
+    pub async fn create(switchboard: &Switchboard) -> Result<Self, SwitchboardError> {
         let endpoint = switchboard
             .endpoint()
             .inputs(Cardinality::One)
@@ -546,7 +546,7 @@ where
     Rep: FlatMsg + HasSchema + Send + Unpin + 'static,
 {
     /// Create a new client endpoint.
-    pub async fn create(switchboard: &mut Switchboard) -> Result<Self, SwitchboardError> {
+    pub async fn create(switchboard: &Switchboard) -> Result<Self, SwitchboardError> {
         let endpoint = switchboard
             .endpoint()
             .inputs(Cardinality::One)

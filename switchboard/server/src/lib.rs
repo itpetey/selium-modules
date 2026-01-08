@@ -12,14 +12,16 @@ use selium_switchboard_protocol::{
     decode_message, encode_message,
 };
 use selium_userland::{
-    entrypoint,
+    DependencyId, dependency_id, entrypoint,
     io::{Channel, DriverError, SharedChannel, Writer},
+    singleton,
 };
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 
 const REQUEST_CHUNK_SIZE: u32 = 64 * 1024;
 const CHANNEL_CAPACITY: u32 = 64 * 1024;
+const SWITCHBOARD_SINGLETON_ID: DependencyId = dependency_id!("selium.switchboard.singleton");
 
 #[derive(Debug, Error)]
 enum SwitchboardServiceError {
@@ -58,12 +60,16 @@ struct SwitchboardService {
 #[instrument(name = "switchboard.start")]
 pub async fn start() -> Result<()> {
     let request_channel = Channel::create(CHANNEL_CAPACITY).await?;
+
+    // Register `Switchboard` as a singleton that can be consumed globally
     let shared = request_channel.share().await?;
+    singleton::register(SWITCHBOARD_SINGLETON_ID, shared.raw()).await?;
+
     info!(
         request_channel = shared.raw(),
-        "switchboard: created request channel"
+        "switchboard: registered Switchboard singleton"
     );
-    // TODO(@maintainer): Register the shared handle for discovery once the registry path exists.
+
     let mut reader = request_channel.subscribe(REQUEST_CHUNK_SIZE).await?;
 
     let mut service = SwitchboardService::new();

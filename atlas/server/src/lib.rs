@@ -9,12 +9,14 @@ use selium_atlas_protocol::{
     uri::{Uri, UriError},
 };
 use selium_userland::{
-    entrypoint,
+    DependencyId, dependency_id, entrypoint,
     io::{Channel, DriverError, SharedChannel},
+    singleton,
 };
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 
+const ATLAS_SINGLETON_ID: DependencyId = dependency_id!("selium.atlas.singleton");
 const REQUEST_CHUNK_SIZE: u32 = 64 * 1024;
 const CHANNEL_CAPACITY: u32 = 64 * 1024;
 
@@ -211,11 +213,16 @@ impl AtlasService {
 #[instrument(name = "atlas.start")]
 pub async fn start() -> Result<()> {
     let request_channel = Channel::create(CHANNEL_CAPACITY).await?;
+
+    // Register `Atlas` as a singleton that can be consumed globally
     let shared = request_channel.share().await?;
+    singleton::register(ATLAS_SINGLETON_ID, shared.raw()).await?;
+
     info!(
         request_channel = shared.raw(),
-        "atlas: created request channel"
+        "atlas: registered Atlas singleton"
     );
+
     // TODO(@maintainer): Register the shared handle for discovery once the registry path exists.
     let mut reader = request_channel.subscribe(REQUEST_CHUNK_SIZE).await?;
 
