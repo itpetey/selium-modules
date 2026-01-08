@@ -26,6 +26,6 @@ rustls-pki-types = { version = "1.13", default-features = false }
 selium-abi = { path = "../../../selium/main/system/abi" }
 selium-userland = { path = "../../../selium/main/system/userland" }
 thiserror = { version = "2.0", default-features = false }
-tokio = { version = "1.48", default-features = false }
+tokio = { version = "1.49", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
