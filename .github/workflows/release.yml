@@ -17,7 +17,7 @@ jobs:
         crate: [remote-client, switchboard, atlas]
     steps:
       - uses: actions/checkout@v6
-      - uses: itpetey/breezy@v0.3.0
+      - uses: itpetey/breezy@v0.3.1
         with:
           language: rust
           directory: ${{ matrix.crate }}
