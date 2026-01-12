@@ -52,21 +52,22 @@ jobs:
       - name: cargo test ${{ matrix.crate }}
         run: cargo test --manifest-path ${{ matrix.crate }}/Cargo.toml --workspace --all-targets
 
-  integration:
-    name: Cargo integration tests
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        crate: [tests/request-reply]
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: mozilla-actions/sccache-action@bafd42bd91680affe190f697cac6ef3ad958ecba
+  # @todo: still relies on external file path to selium-server bin
+  # integration:
+  #   name: Cargo integration tests
+  #   runs-on: ubuntu-latest
+  #   strategy:
+  #     matrix:
+  #       crate: [tests/request-reply]
+  #   env:
+  #     SCCACHE_GHA_ENABLED: "true"
+  #     RUSTC_WRAPPER: "sccache"
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #     - uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         targets: wasm32-unknown-unknown
+  #     - uses: mozilla-actions/sccache-action@bafd42bd91680affe190f697cac6ef3ad958ecba
 
-      - name: cargo test ${{ matrix.crate }}
-        run: cargo test --manifest-path ${{ matrix.crate }}/Cargo.toml
+  #     - name: cargo test ${{ matrix.crate }}
+  #       run: cargo test --manifest-path ${{ matrix.crate }}/Cargo.toml
