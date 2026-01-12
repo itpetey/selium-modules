@@ -24,7 +24,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@bafd42bd91680affe190f697cac6ef3ad958ecba
 
       - name: cargo check
         run: cargo check --manifest-path ${{ matrix.crate }}/Cargo.toml --workspace --all-targets
@@ -47,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@bafd42bd91680affe190f697cac6ef3ad958ecba
 
       - name: cargo test ${{ matrix.crate }}
         run: cargo test --manifest-path ${{ matrix.crate }}/Cargo.toml --workspace --all-targets
@@ -66,7 +66,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@bafd42bd91680affe190f697cac6ef3ad958ecba
 
       - name: cargo test ${{ matrix.crate }}
         run: cargo test --manifest-path ${{ matrix.crate }}/Cargo.toml

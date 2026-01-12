@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@bafd42bd91680affe190f697cac6ef3ad958ecba
 
       - name: Install cargo audit
         run: cargo install cargo-audit
