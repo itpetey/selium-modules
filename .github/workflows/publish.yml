@@ -13,17 +13,30 @@ jobs:
     env:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
-    strategy:
-      matrix:
-        crate: [remote-client, switchboard, atlas]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@bafd42bd91680affe190f697cac6ef3ad958ecba
+
+      - name: Resolve crate directory from tag
+        id: resolve_crate
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          crate="${tag%%-*}"
+          if [ "$crate" = "$tag" ]; then
+            echo "Tag must be in <directory>-<version> format. Got: $tag"
+            exit 1
+          fi
+          if [ ! -f "$crate/Cargo.toml" ]; then
+            echo "No Cargo.toml found at $crate/Cargo.toml for tag $tag"
+            exit 1
+          fi
+          echo "crate=$crate" >> "$GITHUB_OUTPUT"
 
       - name: cargo login
         run: echo ${{ secrets.CRATES_TOKEN }} | cargo login
 
       - name: cargo publish
         run: cargo publish --workspace --keep-going
-        working-directory: ${{ matrix.crate }}
+        working-directory: ${{ steps.resolve_crate.outputs.crate }}
