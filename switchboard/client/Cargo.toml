@@ -13,11 +13,11 @@ categories.workspace = true
 [dependencies]
 futures = { workspace = true, features = ["alloc", "std"] }
 pin-project = { workspace = true }
-selium-switchboard-protocol = { path = "../protocol" }
+selium-switchboard-protocol = { workspace = true }
 selium-userland = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
-selium-switchboard-core = { path = "../core" }
+selium-switchboard-core = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }

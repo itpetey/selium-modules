@@ -17,7 +17,7 @@ crate-type = ["cdylib"]
 [dependencies]
 anyhow = { workspace = true }
 futures = { workspace = true, features = ["alloc", "std"] }
-selium-atlas-protocol = { path = "../protocol" }
+selium-atlas-protocol = { workspace = true }
 selium-userland = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, features = ["attributes"] }

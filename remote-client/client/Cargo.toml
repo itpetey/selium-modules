@@ -15,7 +15,7 @@ futures = { workspace = true, features = ["alloc", "std"] }
 quinn = { workspace = true, features = ["runtime-tokio", "rustls-ring"] }
 rustls = { workspace = true, features = ["ring", "std"] }
 rustls-pki-types = { workspace = true, features = ["alloc"] }
-selium-remote-client-protocol = { path = "../protocol" }
+selium-remote-client-protocol = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = [
   "macros",

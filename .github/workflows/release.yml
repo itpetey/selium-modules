@@ -1,0 +1,23 @@
+name: Draft the release
+
+on:
+  push:
+    branches:
+      - main
+      - hotfix
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    strategy:
+      matrix:
+        crate: [remote-client, switchboard, atlas]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: itpetey/breezy@v0.3.0
+        with:
+          language: rust
+          directory: ${{ matrix.crate }}

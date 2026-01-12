@@ -52,12 +52,12 @@ jobs:
       - name: cargo test ${{ matrix.crate }}
         run: cargo test --manifest-path ${{ matrix.crate }}/Cargo.toml --workspace --all-targets
 
-  ignored:
-    name: Cargo ignored tests
+  integration:
+    name: Cargo integration tests
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        crate: [atlas, remote-client, switchboard]
+        crate: [tests/request-reply]
     env:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
@@ -68,5 +68,5 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: mozilla-actions/sccache-action@v0.0.9
 
-      - name: cargo test ${{ matrix.crate }} --ignored
-        run: cargo test --manifest-path ${{ matrix.crate }}/Cargo.toml -- --ignored
+      - name: cargo test ${{ matrix.crate }}
+        run: cargo test --manifest-path ${{ matrix.crate }}/Cargo.toml

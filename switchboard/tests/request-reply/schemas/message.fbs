@@ -1,9 +1,0 @@
-namespace tests.request_reply;
-
-table Message {
-  /// The echoed payload.
-  msg: string;
-}
-
-root_type Message;
-file_identifier "RRPL";

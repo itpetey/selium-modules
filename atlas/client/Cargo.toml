@@ -12,8 +12,8 @@ categories.workspace = true
 
 [dependencies]
 futures = { workspace = true, features = ["alloc", "std"] }
-selium-atlas-protocol = { path = "../protocol" }
-selium-switchboard = { path = "../../switchboard/client", optional = true }
+selium-atlas-protocol = { workspace = true }
+selium-switchboard = { workspace = true, optional = true }
 selium-userland = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
 tracing = { workspace = true }

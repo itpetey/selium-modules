@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["client", "core", "protocol", "server", "tests/request-reply"]
+members = ["client", "core", "protocol", "server"]
 
 [workspace.package]
 version = "0.1.0"
@@ -18,11 +18,15 @@ anyhow = { version = "1.0", default-features = false }
 cargo = { version = "0.93", default-features = false }
 flatbuffers = { version = "25.12", default-features = false }
 flatbuffers-build = { version = "0.2", default-features = false }
-flatc = { git = "https://github.com/petehayes102/flatc.rs", branch = "v25.12.19" }
+flatc-fork = { version = "0.5.0", default-features = false }
 futures = { version = "0.3", default-features = false }
 pin-project = { version = "1.1", default-features = false }
-selium-abi = { path = "../../../selium/main/system/abi" }
-selium-userland = { path = "../../../selium/main/system/userland" }
+selium-abi = { version = "1.0.0-alpha.1", default-features = false }
+selium-remote-client = { version = "0.1.0", default-features = false }
+selium-switchboard = { path = "client", version = "0.1.0" }
+selium-switchboard-core = { path = "core", version = "0.1.0" }
+selium-switchboard-protocol = { path = "protocol", version = "0.1.0" }
+selium-userland = { version = "1.0.0-alpha.1", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 tokio = { version = "1.49", default-features = false }
 tracing = { version = "0.1", default-features = false }

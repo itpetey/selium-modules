@@ -1,7 +1,7 @@
 use std::{ffi::OsStr, fs, path::Path};
 
 use flatbuffers_build::BuilderOptions;
-use flatc::flatc;
+use flatc_fork::flatc;
 
 const SCHEMAS: [&str; 1] = ["schemas/switchboard.fbs"];
 

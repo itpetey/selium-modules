@@ -148,9 +148,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "flatc"
-version = "0.4.0+25.12.19"
-source = "git+https://github.com/petehayes102/flatc.rs?branch=v25.12.19#7ca870b7c576f95dfc869b0f7aa48b605cb60c70"
+name = "flatc-fork"
+version = "0.5.0+25.12.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c530de940dbc04b9b85816f61ba10973731d2ec3e64643baa5f7f15ecda55440"
 dependencies = [
  "cmake",
 ]
@@ -552,6 +553,8 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 [[package]]
 name = "selium-abi"
 version = "1.0.0-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fbee64ee3efa531508b1b8c17def01faa1d19b389723ab2a580b443914d1f31"
 dependencies = [
  "rkyv",
  "thiserror 2.0.17",
@@ -575,7 +578,7 @@ version = "0.1.0"
 dependencies = [
  "flatbuffers",
  "flatbuffers-build",
- "flatc",
+ "flatc-fork",
  "thiserror 2.0.17",
  "url",
 ]
@@ -610,18 +613,20 @@ version = "0.1.0"
 dependencies = [
  "flatbuffers",
  "flatbuffers-build",
- "flatc",
+ "flatc-fork",
  "thiserror 2.0.17",
 ]
 
 [[package]]
 name = "selium-userland"
 version = "1.0.0-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "949a250fe6522d0622857ccb77982f9b3401c1c492e5104d14f68c0178b39169"
 dependencies = [
  "anyhow",
  "flatbuffers",
  "flatbuffers-build",
- "flatc",
+ "flatc-fork",
  "futures",
  "rkyv",
  "selium-abi",
@@ -635,6 +640,8 @@ dependencies = [
 [[package]]
 name = "selium-userland-macros"
 version = "1.0.0-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9a42ccd34a3ec01f1d119ae84890086e5d26a669ec603f10d641ce8ba766f53"
 dependencies = [
  "blake3",
  "proc-macro2",

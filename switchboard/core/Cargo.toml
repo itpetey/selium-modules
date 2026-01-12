@@ -11,5 +11,5 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-selium-switchboard-protocol = { path = "../protocol" }
+selium-switchboard-protocol = { workspace = true }
 thiserror = { workspace = true }
