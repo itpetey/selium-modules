@@ -3667,7 +3667,7 @@ dependencies = [
 
 [[package]]
 name = "selium-remote-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures",
  "quinn",
@@ -3681,7 +3681,7 @@ dependencies = [
 
 [[package]]
 name = "selium-remote-client-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "flatbuffers-build",

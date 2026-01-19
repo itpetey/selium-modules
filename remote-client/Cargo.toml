@@ -3,7 +3,7 @@ resolver = "2"
 members = ["cli", "client", "protocol", "server"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Selium module for supporting remote clients"
 readme = "README.md"
@@ -24,8 +24,8 @@ quinn = { version = "0.11", default-features = false }
 rustls = { version = "0.23", default-features = false }
 rustls-pki-types = { version = "1.14", default-features = false }
 selium-abi = { version = "1.0.0-alpha.1", default-features = false }
-selium-remote-client = { path = "client", version = "0.1.0" }
-selium-remote-client-protocol = { path = "protocol", version = "0.1.0" }
+selium-remote-client = { path = "client", version = "0.2.0" }
+selium-remote-client-protocol = { path = "protocol", version = "0.2.0" }
 selium-userland = { version = "1.0.0-alpha.1", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 tokio = { version = "1.49", default-features = false }

@@ -77,8 +77,6 @@ async fn handle_req(
 
 #[instrument(skip_all, fields(?request, reader_id = reader.handle(), writer_id = writer.handle()))]
 async fn dispatch(request: Request, reader: &mut Reader, writer: &mut Writer) -> Result<()> {
-    debug!("dispatching request");
-
     match request {
         Request::ChannelCreate(capacity) => {
             let chan = Channel::create(capacity).await?;
@@ -142,8 +140,6 @@ async fn dispatch(request: Request, reader: &mut Reader, writer: &mut Writer) ->
 
 #[instrument(skip_all, fields(?response, writer_id = writer.handle()))]
 async fn send(response: Response, writer: &mut Writer) -> Result<()> {
-    debug!("sending reply");
-
     let encoded = encode_response(&response).map_err(|e| anyhow!(e))?;
     let framed = prefix_frame(encoded).map_err(|e| anyhow!(e))?;
     writer.send(framed).await?;

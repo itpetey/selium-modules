@@ -61,9 +61,12 @@ struct StartArgs {
     /// Entrypoint function to call within the module
     #[arg(default_value = "start")]
     entrypoint: String,
-    /// Additional capabilities to grant the process
+    /// Additional capabilities to grant the process (repeatable)
     #[arg(short, long, value_enum)]
     capability: Vec<CapabilityArg>,
+    /// Comma-separated list of capabilities to grant the process
+    #[arg(long, value_enum, value_delimiter = ',', value_name = "CAPABILITY[,CAPABILITY...]")]
+    capabilities: Vec<CapabilityArg>,
     /// Ordered parameter types describing the entrypoint signature. Optional when `--arg` supplies typed values.
     #[arg(short, long, value_enum)]
     param: Vec<ParamKind>,
@@ -81,24 +84,43 @@ struct StartArgs {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum CapabilityArg {
+    #[value(alias = "SessionLifecycle")]
     SessionLifecycle,
+    #[value(alias = "ChannelLifecycle")]
     ChannelLifecycle,
+    #[value(alias = "ChannelReader")]
     ChannelReader,
+    #[value(alias = "ChannelWriter")]
     ChannelWriter,
+    #[value(alias = "ProcessLifecycle")]
     ProcessLifecycle,
+    #[value(alias = "NetQuicBind")]
     NetQuicBind,
+    #[value(alias = "NetQuicAccept")]
     NetQuicAccept,
+    #[value(alias = "NetQuicConnect")]
     NetQuicConnect,
+    #[value(alias = "NetQuicRead")]
     NetQuicRead,
+    #[value(alias = "NetQuicWrite")]
     NetQuicWrite,
+    #[value(alias = "NetHttpBind")]
     NetHttpBind,
+    #[value(alias = "NetHttpAccept")]
     NetHttpAccept,
+    #[value(alias = "NetHttpConnect")]
     NetHttpConnect,
+    #[value(alias = "NetHttpRead")]
     NetHttpRead,
+    #[value(alias = "NetHttpWrite")]
     NetHttpWrite,
+    #[value(alias = "NetTlsServerConfig")]
     NetTlsServerConfig,
+    #[value(alias = "NetTlsClientConfig")]
     NetTlsClientConfig,
+    #[value(alias = "SingletonRegistry")]
     SingletonRegistry,
+    #[value(alias = "SingletonLookup")]
     SingletonLookup,
 }
 
@@ -227,12 +249,14 @@ async fn start(domain: &str, port: u16, cert_dir: &Path, args: StartArgs) -> Res
     let StartArgs {
         path,
         entrypoint,
-        capability,
+        mut capability,
+        capabilities,
         param,
         result,
         arg,
         attach,
     } = args;
+    capability.extend(capabilities);
     let client = ClientConfigBuilder::default()
         .domain(domain)
         .port(port)
