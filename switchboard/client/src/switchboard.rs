@@ -31,6 +31,14 @@ use selium_userland::{
 type PendingWiring<In, Out> =
     Pin<Box<dyn Future<Output = Result<EndpointWiring<In, Out>, SwitchboardError>>>>;
 
+struct PendingUpdate<In, Out> {
+    future: PendingWiring<In, Out>,
+    reuse_inbound: bool,
+    reuse_outbound: bool,
+    next_inbound: Vec<WiringIngress>,
+    next_outbound: Vec<WiringEgress>,
+}
+
 const CONTROL_CHUNK_SIZE: u32 = 64 * 1024;
 const UPDATE_CHANNEL_CAPACITY: u32 = 64 * 1024;
 const INTERNAL_CHANNEL_CAPACITY: u32 = 16 * 1024;
@@ -88,7 +96,9 @@ pub struct EndpointBuilder<In, Out> {
 pub struct EndpointHandle<In, Out> {
     id: EndpointId,
     updates: Reader,
-    pending: Option<PendingWiring<In, Out>>,
+    pending: Option<PendingUpdate<In, Out>>,
+    last_inbound: Vec<WiringIngress>,
+    last_outbound: Vec<WiringEgress>,
     /// Inbound/outbound channel handles for this endpoint.
     pub io: EndpointIo<In, Out>,
 }
@@ -342,6 +352,8 @@ where
             id: endpoint_id,
             updates,
             pending: None,
+            last_inbound: Vec::new(),
+            last_outbound: Vec::new(),
             io: EndpointIo::new(),
         })
     }
@@ -371,17 +383,31 @@ where
 {
     pub(crate) fn poll_updates(&mut self, cx: &mut Context<'_>) -> Result<(), SwitchboardError> {
         loop {
+            let mut completed = None;
             if let Some(pending) = self.pending.as_mut() {
-                match pending.as_mut().poll(cx) {
-                    Poll::Ready(Ok(wiring)) => {
-                        self.pending = None;
-                        self.io.apply_wiring(wiring);
-                    }
-                    Poll::Ready(Err(err)) => {
-                        self.pending = None;
-                        return Err(err);
-                    }
+                match pending.future.as_mut().poll(cx) {
+                    Poll::Ready(Ok(wiring)) => completed = Some(Ok(wiring)),
+                    Poll::Ready(Err(err)) => completed = Some(Err(err)),
                     Poll::Pending => {}
+                }
+            }
+
+            if let Some(result) = completed {
+                let pending = self.pending.take().expect("pending wiring");
+                match result {
+                    Ok(mut wiring) => {
+                        if pending.reuse_inbound {
+                            wiring.inbound = std::mem::take(&mut self.io.inbound);
+                        }
+                        if pending.reuse_outbound {
+                            wiring.outbound = std::mem::take(&mut self.io.outbound);
+                            wiring.outbound_map = std::mem::take(&mut self.io.outbound_map);
+                        }
+                        self.io.apply_wiring(wiring);
+                        self.last_inbound = pending.next_inbound;
+                        self.last_outbound = pending.next_outbound;
+                    }
+                    Err(err) => return Err(err),
                 }
             }
 
@@ -395,7 +421,41 @@ where
                         inbound, outbound, ..
                     } = message
                     {
-                        self.pending = Some(Box::pin(build_wiring(inbound, outbound)));
+                        let reuse_inbound = inbound == self.last_inbound;
+                        let reuse_outbound = outbound == self.last_outbound;
+                        if reuse_inbound && reuse_outbound {
+                            continue;
+                        }
+
+                        let next_inbound = inbound.clone();
+                        let next_outbound = outbound.clone();
+
+                        let future = Box::pin(async move {
+                            let inbound_links = if reuse_inbound {
+                                Vec::new()
+                            } else {
+                                build_inbound(inbound).await?
+                            };
+                            let (outbound_links, outbound_map) = if reuse_outbound {
+                                (Vec::new(), HashMap::new())
+                            } else {
+                                build_outbound(outbound).await?
+                            };
+
+                            Ok(EndpointWiring {
+                                inbound: inbound_links,
+                                outbound: outbound_links,
+                                outbound_map,
+                            })
+                        });
+
+                        self.pending = Some(PendingUpdate {
+                            future,
+                            reuse_inbound,
+                            reuse_outbound,
+                            next_inbound,
+                            next_outbound,
+                        });
                     }
                 }
                 Poll::Ready(Some(Err(err))) => return Err(SwitchboardError::Driver(err)),
@@ -519,13 +579,11 @@ where
     }
 }
 
-async fn build_wiring<In, Out>(
+async fn build_inbound<In>(
     inbound: Vec<WiringIngress>,
-    outbound: Vec<WiringEgress>,
-) -> Result<EndpointWiring<In, Out>, SwitchboardError>
+) -> Result<Vec<InboundLink<In>>, SwitchboardError>
 where
     In: FlatMsg + Send + Unpin + 'static,
-    Out: FlatMsg + Send + Unpin + 'static,
 {
     let mut inbound_links = Vec::with_capacity(inbound.len());
     for ingress in inbound {
@@ -537,7 +595,15 @@ where
             subscriber: RawSubscriber::new(reader),
         });
     }
+    Ok(inbound_links)
+}
 
+async fn build_outbound<Out>(
+    outbound: Vec<WiringEgress>,
+) -> Result<(Vec<RawPublisher<Out>>, HashMap<EndpointId, ChannelHandle>), SwitchboardError>
+where
+    Out: FlatMsg + Send + Unpin + 'static,
+{
     let mut outbound_links = Vec::with_capacity(outbound.len());
     let mut outbound_map = HashMap::with_capacity(outbound.len());
     for egress in outbound {
@@ -547,12 +613,7 @@ where
         outbound_map.insert(egress.to, channel.handle());
         outbound_links.push(RawPublisher::new(writer));
     }
-
-    Ok(EndpointWiring {
-        inbound: inbound_links,
-        outbound: outbound_links,
-        outbound_map,
-    })
+    Ok((outbound_links, outbound_map))
 }
 
 fn request_id_for(message: &Message) -> u64 {
