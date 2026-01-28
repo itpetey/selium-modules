@@ -116,6 +116,11 @@ struct ChannelGroup {
     exclusive_producers: Vec<EndpointId>,
 }
 
+type ChannelGroupKey = (SchemaId, Backpressure, Vec<EndpointId>, Vec<EndpointId>);
+type ChannelGroupMap = HashMap<ChannelGroupKey, ChannelGroup>;
+type MergeKey = (BTreeSet<EndpointId>, Vec<EndpointId>);
+type ChannelGroupsBySchema = HashMap<(SchemaId, Backpressure), HashMap<MergeKey, ChannelGroup>>;
+
 impl ChannelKey {
     /// Create a new channel key from producers and consumers.
     pub fn new(
@@ -339,10 +344,7 @@ impl Solver for DefaultSolver {
                 .insert(flow.producer);
         }
 
-        let mut channel_groups: HashMap<
-            (SchemaId, Backpressure, Vec<EndpointId>, Vec<EndpointId>),
-            ChannelGroup,
-        > = HashMap::new();
+        let mut channel_groups: ChannelGroupMap = HashMap::new();
         for ((consumer, schema, backpressure, exclusive_producer), producers) in
             consumer_map.into_iter()
         {
@@ -371,16 +373,13 @@ impl Solver for DefaultSolver {
         }
 
         let mut merged: Vec<ChannelGroup> = Vec::new();
-        let mut by_schema: HashMap<
-            (SchemaId, Backpressure),
-            HashMap<(BTreeSet<EndpointId>, Vec<EndpointId>), ChannelGroup>,
-        > = HashMap::new();
+        let mut by_schema: ChannelGroupsBySchema = HashMap::new();
         for group in channel_groups.values() {
             let schema_entry = by_schema
                 .entry((group.schema, group.backpressure))
                 .or_default();
             let consumer_key = group.consumers.clone();
-            let merge_key = (consumer_key, group.exclusive_producers.clone());
+            let merge_key: MergeKey = (consumer_key, group.exclusive_producers.clone());
             let entry = schema_entry
                 .entry(merge_key)
                 .or_insert_with(|| group.clone());
