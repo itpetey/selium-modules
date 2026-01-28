@@ -15,7 +15,8 @@ use selium_userland::{
 };
 
 use crate::switchboard::{
-    Cardinality, EndpointHandle, EndpointId, RawPublisher, Switchboard, SwitchboardError,
+    Backpressure, Cardinality, EndpointHandle, EndpointId, RawPublisher, Switchboard,
+    SwitchboardError,
 };
 
 /// Target that a [`Client`] can connect to for a given request/response pair.
@@ -320,6 +321,21 @@ where
         Ok(Self { endpoint })
     }
 
+    /// Create a new publisher endpoint with the supplied backpressure behaviour.
+    pub async fn create_with_backpressure(
+        switchboard: &Switchboard,
+        backpressure: Backpressure,
+    ) -> Result<Self, SwitchboardError> {
+        let endpoint = switchboard
+            .endpoint()
+            .inputs(Cardinality::Zero)
+            .outputs(Cardinality::One)
+            .output_backpressure(backpressure)
+            .register()
+            .await?;
+        Ok(Self { endpoint })
+    }
+
     /// Connect this publisher to the supplied target(s), wiring outbound flows.
     pub async fn connect<T>(
         &self,
@@ -343,7 +359,10 @@ where
         poll_fn(|cx| {
             self.endpoint.poll_updates(cx)?;
             if self.endpoint.io.outbound.is_empty() {
-                Poll::Pending
+                match self.endpoint.backpressure() {
+                    Backpressure::Park => Poll::Pending,
+                    Backpressure::Drop => Poll::Ready(Ok(())),
+                }
             } else {
                 Poll::Ready(Ok(()))
             }
@@ -364,7 +383,10 @@ where
         endpoint.poll_updates(cx)?;
 
         if endpoint.io.outbound.is_empty() {
-            return Poll::Pending;
+            return match endpoint.backpressure() {
+                Backpressure::Park => Poll::Pending,
+                Backpressure::Drop => Poll::Ready(Ok(())),
+            };
         }
 
         debug_assert_eq!(endpoint.io.outbound.len(), 1);
@@ -381,7 +403,10 @@ where
         let PublisherProject { endpoint } = self.project();
 
         if endpoint.io.outbound.is_empty() {
-            return Err(SwitchboardError::NoRoute);
+            return match endpoint.backpressure() {
+                Backpressure::Park => Err(SwitchboardError::NoRoute),
+                Backpressure::Drop => Ok(()),
+            };
         }
 
         debug_assert_eq!(endpoint.io.outbound.len(), 1);
@@ -396,6 +421,13 @@ where
         let PublisherProject { endpoint } = self.project();
 
         endpoint.poll_updates(cx)?;
+
+        if endpoint.io.outbound.is_empty() {
+            return match endpoint.backpressure() {
+                Backpressure::Park => Poll::Pending,
+                Backpressure::Drop => Poll::Ready(Ok(())),
+            };
+        }
 
         debug_assert_eq!(endpoint.io.outbound.len(), 1);
 
@@ -516,6 +548,21 @@ where
         Ok(Self { endpoint, next: 0 })
     }
 
+    /// Create a new fanout endpoint with the supplied backpressure behaviour.
+    pub async fn create_with_backpressure(
+        switchboard: &Switchboard,
+        backpressure: Backpressure,
+    ) -> Result<Self, SwitchboardError> {
+        let endpoint = switchboard
+            .endpoint()
+            .inputs(Cardinality::Zero)
+            .outputs(Cardinality::Many)
+            .output_backpressure(backpressure)
+            .register()
+            .await?;
+        Ok(Self { endpoint, next: 0 })
+    }
+
     /// Connect this fanout to the supplied target(s), wiring outbound flows.
     pub async fn connect<T>(
         &self,
@@ -539,7 +586,10 @@ where
         poll_fn(|cx| {
             self.endpoint.poll_updates(cx)?;
             if self.endpoint.io.outbound.is_empty() {
-                Poll::Pending
+                match self.endpoint.backpressure() {
+                    Backpressure::Park => Poll::Pending,
+                    Backpressure::Drop => Poll::Ready(Ok(())),
+                }
             } else {
                 Poll::Ready(Ok(()))
             }
@@ -560,7 +610,10 @@ where
         endpoint.poll_updates(cx)?;
 
         if endpoint.io.outbound.is_empty() {
-            return Poll::Pending;
+            return match endpoint.backpressure() {
+                Backpressure::Park => Poll::Pending,
+                Backpressure::Drop => Poll::Ready(Ok(())),
+            };
         }
 
         let idx = *next % endpoint.io.outbound.len();
@@ -576,7 +629,10 @@ where
         let FanoutProject { endpoint, next } = self.project();
 
         if endpoint.io.outbound.is_empty() {
-            return Err(SwitchboardError::NoRoute);
+            return match endpoint.backpressure() {
+                Backpressure::Park => Err(SwitchboardError::NoRoute),
+                Backpressure::Drop => Ok(()),
+            };
         }
 
         let idx = *next % endpoint.io.outbound.len();

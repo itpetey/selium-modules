@@ -8,19 +8,20 @@ use selium_switchboard_core::{
     ChannelKey, SwitchboardCore, SwitchboardError as CoreError, best_compatible_match,
 };
 use selium_switchboard_protocol::{
-    EndpointDirections, EndpointId, Message, ProtocolError, WiringEgress, WiringIngress,
-    decode_message, encode_message,
+    AdoptMode, Backpressure, Cardinality, EndpointDirections, EndpointId, Message, ProtocolError,
+    WiringEgress, WiringIngress, decode_message, encode_message,
 };
 use selium_userland::{
     DependencyId, dependency_id, entrypoint,
-    io::{Channel, DriverError, SharedChannel, Writer},
-    singleton,
+    io::{Channel, ChannelBackpressure, DriverError, SharedChannel, Writer},
+    singleton, spawn,
 };
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 
 const REQUEST_CHUNK_SIZE: u32 = 64 * 1024;
 const CHANNEL_CAPACITY: u32 = 64 * 1024;
+const TAP_CHUNK_SIZE: u32 = 64 * 1024;
 const SWITCHBOARD_SINGLETON_ID: DependencyId = dependency_id!("selium.switchboard.singleton");
 
 #[derive(Debug, Error)]
@@ -33,14 +34,34 @@ enum SwitchboardServiceError {
     Solver(#[from] CoreError),
 }
 
+#[allow(dead_code)] // @todo Note this is a temporary workaround
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChannelAnchor {
+    Producer(EndpointId),
+    Consumer(EndpointId),
+}
+
 struct ChannelEntry {
     channel: Channel,
     shared: SharedChannel,
     key: ChannelKey,
+    anchor: Option<ChannelAnchor>,
+    owned: bool,
+    retained: bool,
 }
 
 struct EndpointRegistration {
     updates: Writer,
+}
+
+impl ChannelEntry {
+    fn anchor_matches(&self, key: &ChannelKey) -> bool {
+        match self.anchor {
+            Some(ChannelAnchor::Producer(endpoint_id)) => key.producers().contains(&endpoint_id),
+            Some(ChannelAnchor::Consumer(endpoint_id)) => key.consumers().contains(&endpoint_id),
+            None => false,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -126,6 +147,23 @@ impl SwitchboardService {
                 self.handle_register(request_id, directions, updates_channel)
                     .await
             }
+            Message::AdoptRequest {
+                request_id,
+                directions,
+                updates_channel,
+                channel,
+                mode,
+            } => {
+                debug!(
+                    request_id,
+                    updates_channel,
+                    channel,
+                    mode = ?mode,
+                    "switchboard: adopt request received"
+                );
+                self.handle_adopt(request_id, directions, updates_channel, channel, mode)
+                    .await
+            }
             Message::ConnectRequest {
                 request_id,
                 from,
@@ -167,6 +205,78 @@ impl SwitchboardService {
         if let Err(err) = self.reconcile().await {
             self.core.remove_endpoint(endpoint_id);
             self.endpoints.remove(&endpoint_id);
+            self.send_error(updates_channel, request_id, err).await?;
+            return Ok(());
+        }
+
+        let response = Message::ResponseRegister {
+            request_id,
+            endpoint_id,
+        };
+        let bytes = encode_message(&response)?;
+        if let Some(registration) = self.endpoints.get_mut(&endpoint_id) {
+            registration.updates.send(bytes).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn handle_adopt(
+        &mut self,
+        request_id: u64,
+        directions: EndpointDirections,
+        updates_channel: u64,
+        channel: u64,
+        mode: AdoptMode,
+    ) -> Result<(), SwitchboardServiceError> {
+        let updates_channel = unsafe { SharedChannel::from_raw(updates_channel) };
+        let updates_writer = Channel::attach_shared(updates_channel)
+            .await?
+            .publish_weak()
+            .await?;
+
+        if directions.output().cardinality() == Cardinality::Zero {
+            self.send_error(
+                updates_channel,
+                request_id,
+                SwitchboardServiceError::Solver(CoreError::Unsolveable),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        let output = (*directions.output()).with_exclusive(true);
+        let directions = EndpointDirections::new(*directions.input(), output);
+
+        let endpoint_id = self.core.add_endpoint(directions);
+        debug!(request_id, endpoint_id, "switchboard: adopted endpoint");
+        self.endpoints.insert(
+            endpoint_id,
+            EndpointRegistration {
+                updates: updates_writer,
+            },
+        );
+
+        let shared = unsafe { SharedChannel::from_raw(channel) };
+        let entry = match self
+            .adopt_channel_entry(endpoint_id, directions.output(), shared, mode)
+            .await
+        {
+            Ok(entry) => entry,
+            Err(err) => {
+                self.core.remove_endpoint(endpoint_id);
+                self.endpoints.remove(&endpoint_id);
+                self.send_error(updates_channel, request_id, err).await?;
+                return Ok(());
+            }
+        };
+
+        self.channels.push(entry);
+
+        if let Err(err) = self.reconcile().await {
+            self.core.remove_endpoint(endpoint_id);
+            self.endpoints.remove(&endpoint_id);
+            self.remove_anchored_channel(endpoint_id).await;
             self.send_error(updates_channel, request_id, err).await?;
             return Ok(());
         }
@@ -251,14 +361,31 @@ impl SwitchboardService {
 
         for spec in &solution.channels {
             let desired_key = spec.key().clone();
-            let position = available
+            let anchored_positions: Vec<usize> = available
                 .iter()
-                .position(|entry| entry.key == desired_key)
-                .or_else(|| {
-                    let keys: Vec<ChannelKey> =
-                        available.iter().map(|entry| entry.key.clone()).collect();
-                    best_compatible_match(&keys, &desired_key)
-                });
+                .enumerate()
+                .filter(|(_, entry)| entry.anchor_matches(&desired_key))
+                .map(|(idx, _)| idx)
+                .collect();
+
+            let position = if anchored_positions.is_empty() {
+                available
+                    .iter()
+                    .position(|entry| entry.key == desired_key)
+                    .or_else(|| {
+                        let keys: Vec<ChannelKey> =
+                            available.iter().map(|entry| entry.key.clone()).collect();
+                        best_compatible_match(&keys, &desired_key)
+                    })
+            } else if anchored_positions.len() == 1 {
+                let pos = anchored_positions[0];
+                if !available[pos].key.is_compatible(&desired_key) {
+                    return Err(CoreError::Unsolveable.into());
+                }
+                Some(pos)
+            } else {
+                return Err(CoreError::Unsolveable.into());
+            };
 
             if let Some(pos) = position {
                 let mut entry = available.swap_remove(pos);
@@ -275,6 +402,10 @@ impl SwitchboardService {
         }
 
         for entry in available {
+            if entry.retained || !entry.owned {
+                retained.push(entry);
+                continue;
+            }
             if let Err(err) = entry.channel.drain().await {
                 warn!(?err, "switchboard: failed to drain channel");
             }
@@ -341,13 +472,101 @@ impl SwitchboardService {
         Ok(())
     }
 
+    async fn adopt_channel_entry(
+        &self,
+        endpoint_id: EndpointId,
+        output: &selium_switchboard_protocol::Direction,
+        shared: SharedChannel,
+        mode: AdoptMode,
+    ) -> Result<ChannelEntry, SwitchboardServiceError> {
+        let key = ChannelKey::new(
+            output.schema_id(),
+            output.backpressure(),
+            std::iter::once(endpoint_id),
+            std::iter::empty(),
+        );
+
+        match mode {
+            AdoptMode::Alias => {
+                let channel = Channel::attach_shared(shared).await?;
+                Ok(ChannelEntry {
+                    channel,
+                    shared,
+                    key,
+                    anchor: Some(ChannelAnchor::Producer(endpoint_id)),
+                    owned: false,
+                    retained: true,
+                })
+            }
+            AdoptMode::Tap => {
+                let source = Channel::attach_shared(shared).await?;
+                let mut entry = Self::create_channel(key).await?;
+                entry.anchor = Some(ChannelAnchor::Producer(endpoint_id));
+                entry.retained = true;
+                Self::spawn_tap(source, entry.channel.clone());
+                Ok(entry)
+            }
+        }
+    }
+
+    async fn remove_anchored_channel(&mut self, endpoint_id: EndpointId) {
+        if let Some(pos) = self.channels.iter().position(|entry| match entry.anchor {
+            Some(ChannelAnchor::Producer(id)) | Some(ChannelAnchor::Consumer(id)) => {
+                id == endpoint_id
+            }
+            None => false,
+        }) {
+            let entry = self.channels.swap_remove(pos);
+            self.release_entry(entry).await;
+        }
+    }
+
+    async fn release_entry(&self, entry: ChannelEntry) {
+        if !entry.owned {
+            return;
+        }
+        if let Err(err) = entry.channel.drain().await {
+            warn!(?err, "switchboard: failed to drain channel");
+        }
+        if let Err(err) = entry.channel.delete().await {
+            warn!(?err, "switchboard: failed to delete channel");
+        }
+    }
+
+    fn spawn_tap(source: Channel, target: Channel) {
+        spawn(async move {
+            if let Err(err) = Self::run_tap(source, target).await {
+                warn!(?err, "switchboard: tap stopped");
+            }
+        });
+    }
+
+    async fn run_tap(source: Channel, target: Channel) -> Result<(), DriverError> {
+        let mut reader = source.subscribe_weak(TAP_CHUNK_SIZE).await?;
+        let mut writer = target.publish_weak().await?;
+        while let Some(frame) = reader.next().await {
+            match frame {
+                Ok(frame) => writer.send(frame.payload).await?,
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(())
+    }
+
     async fn create_channel(key: ChannelKey) -> Result<ChannelEntry, SwitchboardServiceError> {
-        let channel = Channel::create(CHANNEL_CAPACITY).await?;
+        let backpressure = match key.backpressure() {
+            Backpressure::Park => ChannelBackpressure::Park,
+            Backpressure::Drop => ChannelBackpressure::Drop,
+        };
+        let channel = Channel::create_with_backpressure(CHANNEL_CAPACITY, backpressure).await?;
         let shared = channel.share().await?;
         Ok(ChannelEntry {
             channel,
             shared,
             key,
+            anchor: None,
+            owned: true,
+            retained: false,
         })
     }
 }

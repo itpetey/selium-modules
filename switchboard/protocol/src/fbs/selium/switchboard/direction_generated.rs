@@ -20,6 +20,8 @@ impl<'a> ::flatbuffers::Follow<'a> for Direction<'a> {
 impl<'a> Direction<'a> {
   pub const VT_SCHEMA_ID: ::flatbuffers::VOffsetT = 4;
   pub const VT_CARDINALITY: ::flatbuffers::VOffsetT = 6;
+  pub const VT_BACKPRESSURE: ::flatbuffers::VOffsetT = 8;
+  pub const VT_EXCLUSIVE: ::flatbuffers::VOffsetT = 10;
 
   #[inline]
   pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -32,6 +34,8 @@ impl<'a> Direction<'a> {
   ) -> ::flatbuffers::WIPOffset<Direction<'bldr>> {
     let mut builder = DirectionBuilder::new(_fbb);
     if let Some(x) = args.schema_id { builder.add_schema_id(x); }
+    builder.add_exclusive(args.exclusive);
+    builder.add_backpressure(args.backpressure);
     builder.add_cardinality(args.cardinality);
     builder.finish()
   }
@@ -51,6 +55,20 @@ impl<'a> Direction<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<Cardinality>(Direction::VT_CARDINALITY, Some(Cardinality::Zero)).unwrap()}
   }
+  #[inline]
+  pub fn backpressure(&self) -> Backpressure {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<Backpressure>(Direction::VT_BACKPRESSURE, Some(Backpressure::Park)).unwrap()}
+  }
+  #[inline]
+  pub fn exclusive(&self) -> bool {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<bool>(Direction::VT_EXCLUSIVE, Some(false)).unwrap()}
+  }
 }
 
 impl ::flatbuffers::Verifiable for Direction<'_> {
@@ -61,6 +79,8 @@ impl ::flatbuffers::Verifiable for Direction<'_> {
     v.visit_table(pos)?
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, u8>>>("schema_id", Self::VT_SCHEMA_ID, false)?
      .visit_field::<Cardinality>("cardinality", Self::VT_CARDINALITY, false)?
+     .visit_field::<Backpressure>("backpressure", Self::VT_BACKPRESSURE, false)?
+     .visit_field::<bool>("exclusive", Self::VT_EXCLUSIVE, false)?
      .finish();
     Ok(())
   }
@@ -68,6 +88,8 @@ impl ::flatbuffers::Verifiable for Direction<'_> {
 pub struct DirectionArgs<'a> {
     pub schema_id: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, u8>>>,
     pub cardinality: Cardinality,
+    pub backpressure: Backpressure,
+    pub exclusive: bool,
 }
 impl<'a> Default for DirectionArgs<'a> {
   #[inline]
@@ -75,6 +97,8 @@ impl<'a> Default for DirectionArgs<'a> {
     DirectionArgs {
       schema_id: None,
       cardinality: Cardinality::Zero,
+      backpressure: Backpressure::Park,
+      exclusive: false,
     }
   }
 }
@@ -91,6 +115,14 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> DirectionBuilder<'a, 'b, A> {
   #[inline]
   pub fn add_cardinality(&mut self, cardinality: Cardinality) {
     self.fbb_.push_slot::<Cardinality>(Direction::VT_CARDINALITY, cardinality, Cardinality::Zero);
+  }
+  #[inline]
+  pub fn add_backpressure(&mut self, backpressure: Backpressure) {
+    self.fbb_.push_slot::<Backpressure>(Direction::VT_BACKPRESSURE, backpressure, Backpressure::Park);
+  }
+  #[inline]
+  pub fn add_exclusive(&mut self, exclusive: bool) {
+    self.fbb_.push_slot::<bool>(Direction::VT_EXCLUSIVE, exclusive, false);
   }
   #[inline]
   pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> DirectionBuilder<'a, 'b, A> {
@@ -112,6 +144,8 @@ impl ::core::fmt::Debug for Direction<'_> {
     let mut ds = f.debug_struct("Direction");
       ds.field("schema_id", &self.schema_id());
       ds.field("cardinality", &self.cardinality());
+      ds.field("backpressure", &self.backpressure());
+      ds.field("exclusive", &self.exclusive());
       ds.finish()
   }
 }

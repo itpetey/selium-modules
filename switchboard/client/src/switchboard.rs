@@ -6,7 +6,7 @@ use core::{
     task::{Context, Poll},
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -14,7 +14,7 @@ use std::{
 };
 
 use futures::{Future, SinkExt, Stream, StreamExt};
-pub use selium_switchboard_protocol::{Cardinality, EndpointId};
+pub use selium_switchboard_protocol::{AdoptMode, Backpressure, Cardinality, EndpointId};
 use selium_switchboard_protocol::{
     Direction, EndpointDirections, Message, ProtocolError, WiringEgress, WiringIngress,
     decode_message, encode_message,
@@ -81,6 +81,7 @@ struct ClientState {
     pending: HashMap<u64, Channel>,
     endpoints: HashMap<EndpointId, Channel>,
     queued_updates: HashMap<EndpointId, Vec<Vec<u8>>>,
+    ignored: HashSet<EndpointId>,
 }
 
 /// Builder for a new endpoint.
@@ -88,6 +89,8 @@ pub struct EndpointBuilder<In, Out> {
     switchboard: Switchboard,
     input: Cardinality,
     output: Cardinality,
+    output_backpressure: Backpressure,
+    output_exclusive: bool,
     _in: PhantomData<In>,
     _out: PhantomData<Out>,
 }
@@ -99,6 +102,7 @@ pub struct EndpointHandle<In, Out> {
     pending: Option<PendingUpdate<In, Out>>,
     last_inbound: Vec<WiringIngress>,
     last_outbound: Vec<WiringEgress>,
+    backpressure: Backpressure,
     /// Inbound/outbound channel handles for this endpoint.
     pub io: EndpointIo<In, Out>,
 }
@@ -150,6 +154,7 @@ impl Switchboard {
             pending: HashMap::new(),
             endpoints: HashMap::new(),
             queued_updates: HashMap::new(),
+            ignored: HashSet::new(),
         }));
 
         let dispatcher_state = Arc::clone(&state);
@@ -178,6 +183,8 @@ impl Switchboard {
             switchboard: self.clone(),
             input: Cardinality::One,
             output: Cardinality::One,
+            output_backpressure: Backpressure::Park,
+            output_exclusive: false,
             _in: PhantomData,
             _out: PhantomData,
         }
@@ -241,6 +248,53 @@ impl Switchboard {
         }
     }
 
+    /// Adopt a shared channel as the outbound flow for a new endpoint.
+    pub async fn adopt_output_channel<Out>(
+        &self,
+        channel: SharedChannel,
+        backpressure: Backpressure,
+        mode: AdoptMode,
+    ) -> Result<EndpointId, SwitchboardError>
+    where
+        Out: FlatMsg + HasSchema + Send + Unpin + 'static,
+    {
+        let directions = EndpointDirections::new(
+            Direction::new(Out::SCHEMA.hash, Cardinality::Zero, Backpressure::Park),
+            Direction::new(Out::SCHEMA.hash, Cardinality::One, backpressure).with_exclusive(true),
+        );
+        self.adopt_endpoint(directions, channel, mode).await
+    }
+
+    /// Adopt an existing shared channel as a new endpoint with the supplied directions.
+    pub async fn adopt_endpoint(
+        &self,
+        directions: EndpointDirections,
+        channel: SharedChannel,
+        mode: AdoptMode,
+    ) -> Result<EndpointId, SwitchboardError> {
+        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        debug!(request_id, "switchboard: adopting endpoint");
+        let response = self
+            .send_request(Message::AdoptRequest {
+                request_id,
+                directions,
+                updates_channel: self.updates_shared.raw(),
+                channel: channel.raw(),
+                mode,
+            })
+            .await?;
+
+        match response {
+            Message::ResponseRegister { endpoint_id, .. } => {
+                let mut guard = self.state()?;
+                guard.ignored.insert(endpoint_id);
+                Ok(endpoint_id)
+            }
+            Message::ResponseError { message, .. } => Err(SwitchboardError::Remote(message)),
+            _ => Err(SwitchboardError::Protocol(ProtocolError::UnknownPayload)),
+        }
+    }
+
     async fn send_request(&self, message: Message) -> Result<Message, SwitchboardError> {
         let request_id = request_id_for(&message);
         debug!(request_id, "switchboard: sending request");
@@ -282,6 +336,7 @@ impl Switchboard {
     ) -> Result<(), SwitchboardError> {
         let queued = {
             let mut guard = self.state()?;
+            guard.ignored.remove(&endpoint_id);
             guard.endpoints.insert(endpoint_id, channel.clone());
             guard.queued_updates.remove(&endpoint_id)
         };
@@ -333,11 +388,24 @@ where
         self
     }
 
+    /// Set the outbound backpressure behaviour. Defaults to [`Backpressure::Park`].
+    pub fn output_backpressure(mut self, backpressure: Backpressure) -> Self {
+        self.output_backpressure = backpressure;
+        self
+    }
+
+    /// Set whether outbound flows should remain isolated to a single channel.
+    pub fn output_exclusive(mut self, exclusive: bool) -> Self {
+        self.output_exclusive = exclusive;
+        self
+    }
+
     /// Register the endpoint with the switchboard.
     pub async fn register(self) -> Result<EndpointHandle<In, Out>, SwitchboardError> {
         let directions = EndpointDirections::new(
-            Direction::new(In::SCHEMA.hash, self.input),
-            Direction::new(Out::SCHEMA.hash, self.output),
+            Direction::new(In::SCHEMA.hash, self.input, Backpressure::Park),
+            Direction::new(Out::SCHEMA.hash, self.output, self.output_backpressure)
+                .with_exclusive(self.output_exclusive),
         );
 
         let internal_channel = Channel::create(INTERNAL_CHANNEL_CAPACITY).await?;
@@ -354,6 +422,7 @@ where
             pending: None,
             last_inbound: Vec::new(),
             last_outbound: Vec::new(),
+            backpressure: self.output_backpressure,
             io: EndpointIo::new(),
         })
     }
@@ -373,6 +442,11 @@ impl<In, Out> EndpointHandle<In, Out> {
     /// Lookup the outbound channel handle targeting a specific endpoint.
     pub fn outbound_handle(&self, target: EndpointId) -> Option<ChannelHandle> {
         self.io.outbound_handle(target)
+    }
+
+    /// Backpressure behaviour for outbound writers when no route exists.
+    pub fn backpressure(&self) -> Backpressure {
+        self.backpressure
     }
 }
 
@@ -619,6 +693,7 @@ where
 fn request_id_for(message: &Message) -> u64 {
     match message {
         Message::RegisterRequest { request_id, .. }
+        | Message::AdoptRequest { request_id, .. }
         | Message::ConnectRequest { request_id, .. }
         | Message::ResponseRegister { request_id, .. }
         | Message::ResponseOk { request_id, .. }
@@ -678,18 +753,25 @@ async fn drive_updates(mut reader: Reader, state: Arc<Mutex<ClientState>>) {
             }
             Message::WiringUpdate { endpoint_id, .. } => {
                 debug!(endpoint_id, "switchboard: dispatching wiring update");
-                let (channel, queued) = match state.lock() {
+                let (channel, queued, ignored) = match state.lock() {
                     Ok(mut guard) => {
-                        if let Some(channel) = guard.endpoints.get(&endpoint_id).cloned() {
-                            (Some(channel), None)
+                        if guard.ignored.contains(&endpoint_id) {
+                            (None, None, true)
+                        } else if let Some(channel) = guard.endpoints.get(&endpoint_id).cloned() {
+                            (Some(channel), None, false)
                         } else {
                             let entry = guard.queued_updates.entry(endpoint_id).or_default();
                             entry.push(payload.clone());
-                            (None, Some(()))
+                            (None, Some(()), false)
                         }
                     }
-                    Err(_) => (None, Some(())),
+                    Err(_) => (None, Some(()), false),
                 };
+
+                if ignored {
+                    continue;
+                }
+
                 if let Some(channel) = channel
                     && let Err(err) = forward_bytes(channel, payload).await
                 {

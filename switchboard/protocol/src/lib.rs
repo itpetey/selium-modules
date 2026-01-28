@@ -29,11 +29,31 @@ pub enum Cardinality {
     Many,
 }
 
+/// Backpressure behaviour for outbound channels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Backpressure {
+    /// Writers wait for buffer space when the channel is full.
+    Park,
+    /// Writers drop payloads when the channel is full.
+    Drop,
+}
+
+/// Adoption mode for shared channels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdoptMode {
+    /// Adopt the channel directly without rewiring.
+    Alias,
+    /// Tap the channel with a weak reader and forward into a switchboard channel.
+    Tap,
+}
+
 /// Direction metadata for an endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Direction {
     schema_id: SchemaId,
     cardinality: Cardinality,
+    backpressure: Backpressure,
+    exclusive: bool,
 }
 
 /// Input/output directions for an endpoint.
@@ -72,6 +92,19 @@ pub enum Message {
         directions: EndpointDirections,
         /// Shared handle for the client's update channel.
         updates_channel: u64,
+    },
+    /// Adopt an existing shared channel as a switchboard endpoint.
+    AdoptRequest {
+        /// Correlation identifier supplied by the client.
+        request_id: u64,
+        /// Endpoint directions.
+        directions: EndpointDirections,
+        /// Shared handle for the client's update channel.
+        updates_channel: u64,
+        /// Shared handle of the channel to adopt.
+        channel: u64,
+        /// Adoption mode for the channel.
+        mode: AdoptMode,
     },
     /// Connect two endpoints.
     ConnectRequest {
@@ -135,6 +168,12 @@ pub enum ProtocolError {
     /// Cardinality variant was not recognised.
     #[error("unknown cardinality variant")]
     UnknownCardinality,
+    /// Backpressure variant was not recognised.
+    #[error("unknown backpressure variant")]
+    UnknownBackpressure,
+    /// Adoption mode variant was not recognised.
+    #[error("unknown adopt mode variant")]
+    UnknownAdoptMode,
     /// Switchboard message identifier did not match.
     #[error("invalid switchboard message identifier")]
     InvalidIdentifier,
@@ -154,11 +193,13 @@ impl Cardinality {
 }
 
 impl Direction {
-    /// Create a new direction with the supplied schema and cardinality.
-    pub fn new(schema_id: SchemaId, cardinality: Cardinality) -> Self {
+    /// Create a new direction with the supplied schema, cardinality, and backpressure.
+    pub fn new(schema_id: SchemaId, cardinality: Cardinality, backpressure: Backpressure) -> Self {
         Self {
             schema_id,
             cardinality,
+            backpressure,
+            exclusive: false,
         }
     }
 
@@ -170,6 +211,22 @@ impl Direction {
     /// Cardinality constraint for this direction.
     pub fn cardinality(&self) -> Cardinality {
         self.cardinality
+    }
+
+    /// Backpressure behaviour for this direction.
+    pub fn backpressure(&self) -> Backpressure {
+        self.backpressure
+    }
+
+    /// Whether this direction must remain isolated on its own channel.
+    pub fn exclusive(&self) -> bool {
+        self.exclusive
+    }
+
+    /// Set whether this direction must remain isolated on its own channel.
+    pub fn with_exclusive(mut self, exclusive: bool) -> Self {
+        self.exclusive = exclusive;
+        self
     }
 }
 
@@ -213,6 +270,48 @@ impl From<Cardinality> for fb::Cardinality {
     }
 }
 
+impl TryFrom<fb::Backpressure> for Backpressure {
+    type Error = ProtocolError;
+
+    fn try_from(value: fb::Backpressure) -> Result<Self, Self::Error> {
+        match value {
+            fb::Backpressure::Park => Ok(Backpressure::Park),
+            fb::Backpressure::Drop => Ok(Backpressure::Drop),
+            _ => Err(ProtocolError::UnknownBackpressure),
+        }
+    }
+}
+
+impl From<Backpressure> for fb::Backpressure {
+    fn from(value: Backpressure) -> Self {
+        match value {
+            Backpressure::Park => fb::Backpressure::Park,
+            Backpressure::Drop => fb::Backpressure::Drop,
+        }
+    }
+}
+
+impl TryFrom<fb::AdoptMode> for AdoptMode {
+    type Error = ProtocolError;
+
+    fn try_from(value: fb::AdoptMode) -> Result<Self, Self::Error> {
+        match value {
+            fb::AdoptMode::Alias => Ok(AdoptMode::Alias),
+            fb::AdoptMode::Tap => Ok(AdoptMode::Tap),
+            _ => Err(ProtocolError::UnknownAdoptMode),
+        }
+    }
+}
+
+impl From<AdoptMode> for fb::AdoptMode {
+    fn from(value: AdoptMode) -> Self {
+        match value {
+            AdoptMode::Alias => fb::AdoptMode::Alias,
+            AdoptMode::Tap => fb::AdoptMode::Tap,
+        }
+    }
+}
+
 impl From<InvalidFlatbuffer> for ProtocolError {
     fn from(value: InvalidFlatbuffer) -> Self {
         ProtocolError::InvalidFlatbuffer(value)
@@ -239,6 +338,29 @@ pub fn encode_message(message: &Message) -> Result<Vec<u8>, ProtocolError> {
             (
                 *request_id,
                 fb::SwitchboardPayload::RegisterRequest,
+                Some(payload.as_union_value()),
+            )
+        }
+        Message::AdoptRequest {
+            request_id,
+            directions,
+            updates_channel,
+            channel,
+            mode,
+        } => {
+            let directions = encode_directions(&mut builder, directions);
+            let payload = fb::AdoptRequest::create(
+                &mut builder,
+                &fb::AdoptRequestArgs {
+                    directions: Some(directions),
+                    updates_channel: *updates_channel,
+                    channel: *channel,
+                    mode: (*mode).into(),
+                },
+            );
+            (
+                *request_id,
+                fb::SwitchboardPayload::AdoptRequest,
                 Some(payload.as_union_value()),
             )
         }
@@ -356,6 +478,21 @@ pub fn decode_message(bytes: &[u8]) -> Result<Message, ProtocolError> {
                 updates_channel: req.updates_channel(),
             })
         }
+        fb::SwitchboardPayload::AdoptRequest => {
+            let req = message
+                .payload_as_adopt_request()
+                .ok_or(ProtocolError::MissingPayload)?;
+            let directions =
+                decode_directions(req.directions().ok_or(ProtocolError::MissingPayload)?)?;
+            let mode = AdoptMode::try_from(req.mode())?;
+            Ok(Message::AdoptRequest {
+                request_id: message.request_id(),
+                directions,
+                updates_channel: req.updates_channel(),
+                channel: req.channel(),
+                mode,
+            })
+        }
         fb::SwitchboardPayload::ConnectRequest => {
             let req = message
                 .payload_as_connect_request()
@@ -427,6 +564,8 @@ fn encode_direction<'bldr>(
         &fb::DirectionArgs {
             schema_id: Some(schema_id),
             cardinality: direction.cardinality().into(),
+            backpressure: direction.backpressure().into(),
+            exclusive: direction.exclusive(),
         },
     )
 }
@@ -484,7 +623,9 @@ fn decode_directions(
 fn decode_direction(direction: fb::Direction<'_>) -> Result<Direction, ProtocolError> {
     let schema_id = decode_schema_id(direction.schema_id())?;
     let cardinality = Cardinality::try_from(direction.cardinality())?;
-    Ok(Direction::new(schema_id, cardinality))
+    let backpressure = Backpressure::try_from(direction.backpressure())?;
+    let exclusive = direction.exclusive();
+    Ok(Direction::new(schema_id, cardinality, backpressure).with_exclusive(exclusive))
 }
 
 fn decode_schema_id(

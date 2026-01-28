@@ -13,5 +13,6 @@ pub use messaging::{
 pub use selium_switchboard_protocol as protocol;
 /// Switchboard client types for guest code.
 pub use switchboard::{
-    Cardinality, EndpointBuilder, EndpointHandle, EndpointId, Switchboard, SwitchboardError,
+    AdoptMode, Backpressure, Cardinality, EndpointBuilder, EndpointHandle, EndpointId, Switchboard,
+    SwitchboardError,
 };

@@ -2,7 +2,9 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use selium_switchboard_protocol::{Cardinality, EndpointDirections, EndpointId, SchemaId};
+use selium_switchboard_protocol::{
+    Backpressure, Cardinality, EndpointDirections, EndpointId, SchemaId,
+};
 use thiserror::Error;
 
 /// Errors produced while planning switchboard wiring.
@@ -32,6 +34,7 @@ pub struct Intent {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ChannelKey {
     schema: SchemaId,
+    backpressure: Backpressure,
     producers: Vec<EndpointId>,
     consumers: Vec<EndpointId>,
 }
@@ -100,19 +103,24 @@ struct FlowSpec {
     producer: EndpointId,
     consumer: EndpointId,
     schema: SchemaId,
+    backpressure: Backpressure,
+    producer_exclusive: bool,
 }
 
 #[derive(Clone)]
 struct ChannelGroup {
     schema: SchemaId,
+    backpressure: Backpressure,
     producers: BTreeSet<EndpointId>,
     consumers: BTreeSet<EndpointId>,
+    exclusive_producers: Vec<EndpointId>,
 }
 
 impl ChannelKey {
     /// Create a new channel key from producers and consumers.
     pub fn new(
         schema: SchemaId,
+        backpressure: Backpressure,
         producers: impl Iterator<Item = EndpointId>,
         consumers: impl Iterator<Item = EndpointId>,
     ) -> Self {
@@ -124,21 +132,29 @@ impl ChannelKey {
         consumers.dedup();
         Self {
             schema,
+            backpressure,
             producers,
             consumers,
         }
     }
 
     /// Check whether this key matches the supplied endpoints and schema.
-    pub fn contains(&self, schema: SchemaId, producer: EndpointId, consumer: EndpointId) -> bool {
+    pub fn contains(
+        &self,
+        schema: SchemaId,
+        backpressure: Backpressure,
+        producer: EndpointId,
+        consumer: EndpointId,
+    ) -> bool {
         self.schema == schema
+            && self.backpressure == backpressure
             && self.producers.binary_search(&producer).is_ok()
             && self.consumers.binary_search(&consumer).is_ok()
     }
 
     /// Check whether the key is compatible with another key.
     pub fn is_compatible(&self, desired: &ChannelKey) -> bool {
-        if self.schema != desired.schema {
+        if self.schema != desired.schema || self.backpressure != desired.backpressure {
             return false;
         }
         (is_subset(&self.producers, desired.producers())
@@ -150,6 +166,11 @@ impl ChannelKey {
     /// Return the schema identifier for the key.
     pub fn schema(&self) -> SchemaId {
         self.schema
+    }
+
+    /// Return the backpressure behaviour for this channel.
+    pub fn backpressure(&self) -> Backpressure {
+        self.backpressure
     }
 
     /// Return producers on this channel.
@@ -167,11 +188,12 @@ impl ChannelSpec {
     /// Create a new channel specification.
     pub fn new(
         schema: SchemaId,
+        backpressure: Backpressure,
         producers: impl Iterator<Item = EndpointId>,
         consumers: impl Iterator<Item = EndpointId>,
     ) -> Self {
         Self {
-            key: ChannelKey::new(schema, producers, consumers),
+            key: ChannelKey::new(schema, backpressure, producers, consumers),
         }
     }
 
@@ -201,6 +223,8 @@ impl DefaultSolver {
             producer: producer_id,
             consumer: consumer_id,
             schema: output.schema_id(),
+            backpressure: output.backpressure(),
+            producer_exclusive: output.exclusive(),
         })
     }
 }
@@ -299,38 +323,66 @@ impl Solver for DefaultSolver {
             flows.push(flow);
         }
 
-        let mut consumer_map: HashMap<(EndpointId, SchemaId), BTreeSet<EndpointId>> =
-            HashMap::new();
+        let mut consumer_map: HashMap<
+            (EndpointId, SchemaId, Backpressure, Option<EndpointId>),
+            BTreeSet<EndpointId>,
+        > = HashMap::new();
         for flow in flows {
+            let exclusive_key = if flow.producer_exclusive {
+                Some(flow.producer)
+            } else {
+                None
+            };
             consumer_map
-                .entry((flow.consumer, flow.schema))
+                .entry((flow.consumer, flow.schema, flow.backpressure, exclusive_key))
                 .or_default()
                 .insert(flow.producer);
         }
 
-        let mut channel_groups: HashMap<(SchemaId, Vec<EndpointId>), ChannelGroup> = HashMap::new();
-        for ((consumer, schema), producers) in consumer_map.into_iter() {
+        let mut channel_groups: HashMap<
+            (SchemaId, Backpressure, Vec<EndpointId>, Vec<EndpointId>),
+            ChannelGroup,
+        > = HashMap::new();
+        for ((consumer, schema, backpressure, exclusive_producer), producers) in
+            consumer_map.into_iter()
+        {
             if producers.is_empty() {
                 continue;
             }
             let producers_vec: Vec<EndpointId> = producers.iter().copied().collect();
-            let key = (schema, producers_vec.clone());
+            let mut exclusive_producers = Vec::new();
+            if let Some(exclusive) = exclusive_producer {
+                exclusive_producers.push(exclusive);
+            }
+            let key = (
+                schema,
+                backpressure,
+                producers_vec.clone(),
+                exclusive_producers.clone(),
+            );
             let group = channel_groups.entry(key).or_insert_with(|| ChannelGroup {
                 schema,
+                backpressure,
                 producers: producers.clone(),
                 consumers: BTreeSet::new(),
+                exclusive_producers,
             });
             group.consumers.insert(consumer);
         }
 
         let mut merged: Vec<ChannelGroup> = Vec::new();
-        let mut by_schema: HashMap<SchemaId, HashMap<BTreeSet<EndpointId>, ChannelGroup>> =
-            HashMap::new();
+        let mut by_schema: HashMap<
+            (SchemaId, Backpressure),
+            HashMap<(BTreeSet<EndpointId>, Vec<EndpointId>), ChannelGroup>,
+        > = HashMap::new();
         for group in channel_groups.values() {
-            let schema_entry = by_schema.entry(group.schema).or_default();
+            let schema_entry = by_schema
+                .entry((group.schema, group.backpressure))
+                .or_default();
             let consumer_key = group.consumers.clone();
+            let merge_key = (consumer_key, group.exclusive_producers.clone());
             let entry = schema_entry
-                .entry(consumer_key)
+                .entry(merge_key)
                 .or_insert_with(|| group.clone());
             entry.producers.extend(group.producers.iter().copied());
         }
@@ -364,6 +416,7 @@ impl Solver for DefaultSolver {
             .map(|group| {
                 ChannelSpec::new(
                     group.schema,
+                    group.backpressure,
                     group.producers.iter().copied(),
                     group.consumers.iter().copied(),
                 )
@@ -378,8 +431,12 @@ impl Solver for DefaultSolver {
                 let channel_index = channel_specs
                     .iter()
                     .position(|spec| {
-                        spec.key()
-                            .contains(flow.schema, flow.producer, flow.consumer)
+                        spec.key().contains(
+                            flow.schema,
+                            flow.backpressure,
+                            flow.producer,
+                            flow.consumer,
+                        )
                     })
                     .ok_or(SwitchboardError::Unsolveable)?;
                 flow_routes.push(FlowRoute {

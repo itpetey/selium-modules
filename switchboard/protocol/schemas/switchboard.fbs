@@ -6,9 +6,21 @@ enum Cardinality: ubyte {
   Many = 2
 }
 
+enum Backpressure: ubyte {
+  Park = 0,
+  Drop = 1
+}
+
+enum AdoptMode: ubyte {
+  Alias = 0,
+  Tap = 1
+}
+
 table Direction {
   schema_id: [ubyte];
   cardinality: Cardinality;
+  backpressure: Backpressure = Park;
+  exclusive: bool = false;
 }
 
 table EndpointDirections {
@@ -19,6 +31,13 @@ table EndpointDirections {
 table RegisterRequest {
   directions: EndpointDirections;
   updates_channel: ulong;
+}
+
+table AdoptRequest {
+  directions: EndpointDirections;
+  updates_channel: ulong;
+  channel: ulong;
+  mode: AdoptMode = Alias;
 }
 
 table ConnectRequest {
@@ -55,6 +74,7 @@ table WiringUpdate {
 
 union SwitchboardPayload {
   RegisterRequest,
+  AdoptRequest,
   ConnectRequest,
   RegisterResponse,
   OkResponse,

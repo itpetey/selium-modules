@@ -5,12 +5,13 @@ use super::*;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_SWITCHBOARD_PAYLOAD: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_SWITCHBOARD_PAYLOAD: u8 = 6;
+pub const ENUM_MAX_SWITCHBOARD_PAYLOAD: u8 = 7;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_SWITCHBOARD_PAYLOAD: [SwitchboardPayload; 7] = [
+pub const ENUM_VALUES_SWITCHBOARD_PAYLOAD: [SwitchboardPayload; 8] = [
   SwitchboardPayload::NONE,
   SwitchboardPayload::RegisterRequest,
+  SwitchboardPayload::AdoptRequest,
   SwitchboardPayload::ConnectRequest,
   SwitchboardPayload::RegisterResponse,
   SwitchboardPayload::OkResponse,
@@ -25,17 +26,19 @@ pub struct SwitchboardPayload(pub u8);
 impl SwitchboardPayload {
   pub const NONE: Self = Self(0);
   pub const RegisterRequest: Self = Self(1);
-  pub const ConnectRequest: Self = Self(2);
-  pub const RegisterResponse: Self = Self(3);
-  pub const OkResponse: Self = Self(4);
-  pub const ErrorResponse: Self = Self(5);
-  pub const WiringUpdate: Self = Self(6);
+  pub const AdoptRequest: Self = Self(2);
+  pub const ConnectRequest: Self = Self(3);
+  pub const RegisterResponse: Self = Self(4);
+  pub const OkResponse: Self = Self(5);
+  pub const ErrorResponse: Self = Self(6);
+  pub const WiringUpdate: Self = Self(7);
 
   pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 6;
+  pub const ENUM_MAX: u8 = 7;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::NONE,
     Self::RegisterRequest,
+    Self::AdoptRequest,
     Self::ConnectRequest,
     Self::RegisterResponse,
     Self::OkResponse,
@@ -47,6 +50,7 @@ impl SwitchboardPayload {
     match self {
       Self::NONE => Some("NONE"),
       Self::RegisterRequest => Some("RegisterRequest"),
+      Self::AdoptRequest => Some("AdoptRequest"),
       Self::ConnectRequest => Some("ConnectRequest"),
       Self::RegisterResponse => Some("RegisterResponse"),
       Self::OkResponse => Some("OkResponse"),

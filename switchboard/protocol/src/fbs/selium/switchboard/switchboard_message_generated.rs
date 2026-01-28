@@ -77,6 +77,21 @@ impl<'a> SwitchboardMessage<'a> {
 
   #[inline]
   #[allow(non_snake_case)]
+  pub fn payload_as_adopt_request(&self) -> Option<AdoptRequest<'a>> {
+    if self.payload_type() == SwitchboardPayload::AdoptRequest {
+      self.payload().map(|t| {
+       // Safety:
+       // Created from a valid Table for this object
+       // Which contains a valid union in this slot
+       unsafe { AdoptRequest::init_from_table(t) }
+     })
+    } else {
+      None
+    }
+  }
+
+  #[inline]
+  #[allow(non_snake_case)]
   pub fn payload_as_connect_request(&self) -> Option<ConnectRequest<'a>> {
     if self.payload_type() == SwitchboardPayload::ConnectRequest {
       self.payload().map(|t| {
@@ -162,6 +177,7 @@ impl ::flatbuffers::Verifiable for SwitchboardMessage<'_> {
      .visit_union::<SwitchboardPayload, _>("payload_type", Self::VT_PAYLOAD_TYPE, "payload", Self::VT_PAYLOAD, false, |key, v, pos| {
         match key {
           SwitchboardPayload::RegisterRequest => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<RegisterRequest>>("SwitchboardPayload::RegisterRequest", pos),
+          SwitchboardPayload::AdoptRequest => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<AdoptRequest>>("SwitchboardPayload::AdoptRequest", pos),
           SwitchboardPayload::ConnectRequest => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<ConnectRequest>>("SwitchboardPayload::ConnectRequest", pos),
           SwitchboardPayload::RegisterResponse => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<RegisterResponse>>("SwitchboardPayload::RegisterResponse", pos),
           SwitchboardPayload::OkResponse => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<OkResponse>>("SwitchboardPayload::OkResponse", pos),
@@ -230,6 +246,13 @@ impl ::core::fmt::Debug for SwitchboardMessage<'_> {
       match self.payload_type() {
         SwitchboardPayload::RegisterRequest => {
           if let Some(x) = self.payload_as_register_request() {
+            ds.field("payload", &x)
+          } else {
+            ds.field("payload", &"InvalidFlatbuffer: Union discriminant does not match value.")
+          }
+        },
+        SwitchboardPayload::AdoptRequest => {
+          if let Some(x) = self.payload_as_adopt_request() {
             ds.field("payload", &x)
           } else {
             ds.field("payload", &"InvalidFlatbuffer: Union discriminant does not match value.")

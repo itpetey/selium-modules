@@ -4,6 +4,12 @@ pub mod selium {
   use super::*;
   pub mod switchboard {
     use super::*;
+    mod adopt_mode_generated;
+    pub use self::adopt_mode_generated::*;
+    mod adopt_request_generated;
+    pub use self::adopt_request_generated::*;
+    mod backpressure_generated;
+    pub use self::backpressure_generated::*;
     mod cardinality_generated;
     pub use self::cardinality_generated::*;
     mod connect_request_generated;
