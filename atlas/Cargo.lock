@@ -587,7 +587,7 @@ dependencies = [
 
 [[package]]
 name = "selium-atlas"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "futures",
  "selium-atlas-protocol",
@@ -599,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "selium-atlas-protocol"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "flatbuffers",
  "flatbuffers-build",
@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "selium-atlas-server"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "futures",
@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "selium-switchboard"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "futures",
  "pin-project",
@@ -634,7 +634,7 @@ dependencies = [
 
 [[package]]
 name = "selium-switchboard-protocol"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "flatbuffers",
  "flatbuffers-build",

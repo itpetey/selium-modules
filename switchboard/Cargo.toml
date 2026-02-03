@@ -3,7 +3,7 @@ resolver = "2"
 members = ["client", "core", "protocol", "server"]
 
 [workspace.package]
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 description = "Selium module for abstracting channel management and messaging patterns"
 readme = "README.md"
@@ -20,8 +20,8 @@ flatbuffers-build = { version = "0.2", default-features = false }
 flatc-fork = { version = "0.5.0", default-features = false }
 futures = { version = "0.3", default-features = false }
 pin-project = { version = "1.1", default-features = false }
-selium-switchboard-core = { path = "core", version = "0.4.1" }
-selium-switchboard-protocol = { path = "protocol", version = "0.4.1" }
+selium-switchboard-core = { path = "core", version = "0.4.2" }
+selium-switchboard-protocol = { path = "protocol", version = "0.4.2" }
 selium-userland = { version = "1.0.0-alpha.5", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 tokio = { version = "1.49", default-features = false }

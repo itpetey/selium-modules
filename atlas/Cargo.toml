@@ -3,7 +3,7 @@ resolver = "2"
 members = ["client", "protocol", "server"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Selium module for indexing and discovering resources with URIs"
 readme = "README.md"
@@ -19,8 +19,8 @@ flatbuffers = { version = "25.12", default-features = false }
 flatbuffers-build = { version = "0.2", default-features = false }
 flatc-fork = { version = "0.5", default-features = false }
 futures = { version = "0.3", default-features = false }
-selium-atlas-protocol = { path = "protocol", version = "0.2.1" }
-selium-switchboard = { path = "../switchboard/client", version = "0.4.1", default-features = false }
+selium-atlas-protocol = { path = "protocol", version = "0.2.2" }
+selium-switchboard = { path = "../switchboard/client", version = "0.4.2", default-features = false }
 selium-userland = { version = "1.0.0-alpha.5", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 tracing = { version = "0.1", default-features = false }

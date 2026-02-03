@@ -52,6 +52,22 @@ jobs:
       - name: cargo test ${{ matrix.crate }}
         run: cargo test --manifest-path ${{ matrix.crate }}/Cargo.toml --workspace --all-targets
 
+  docs:
+    name: docs.rs test build
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -Dwarnings
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/install@cargo-docs-rs
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: cargo docs-rs
+        run: cargo +nightly docs-rs -p selium-userland
+
   # @todo: still relies on external file path to selium-server bin
   # integration:
   #   name: Cargo integration tests
