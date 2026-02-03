@@ -57,8 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        module: [atlas, remote-client, switchboard]
-        crate: [client, protocol]
+        crate: [atlas, remote-client, switchboard]
     env:
       RUSTDOCFLAGS: -Dwarnings
       SCCACHE_GHA_ENABLED: "true"
@@ -70,7 +69,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: cargo docs-rs
-        run: cargo +nightly docs-rs --manifest-path ${{ matrix.module }}/Cargo.toml -p selium-${{ matrix.module }}-${{ matrix.crate }}
+        run: cargo +nightly docs-rs --manifest-path ${{ matrix.module }}/Cargo.toml -p selium-${{ matrix.crate }}
 
   # @todo: still relies on external file path to selium-server bin
   # integration:
