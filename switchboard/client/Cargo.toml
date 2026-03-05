@@ -13,6 +13,7 @@ categories.workspace = true
 [dependencies]
 futures = { workspace = true, features = ["alloc", "std"] }
 pin-project = { workspace = true }
+selium-abi = { workspace = true }
 selium-switchboard-protocol = { workspace = true }
 selium-userland = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }

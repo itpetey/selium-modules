@@ -11,13 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-futures = { workspace = true, features = ["alloc", "std"] }
 selium-atlas-protocol = { workspace = true }
-selium-switchboard = { workspace = true, optional = true }
-selium-userland = { workspace = true }
+selium-switchboard = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
 tracing = { workspace = true }
-
-[features]
-default = ["switchboard"]
-switchboard = ["dep:selium-switchboard"]

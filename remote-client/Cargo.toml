@@ -23,10 +23,10 @@ futures = { version = "0.3", default-features = false }
 quinn = { version = "0.11", default-features = false }
 rustls = { version = "0.23", default-features = false }
 rustls-pki-types = { version = "1.14", default-features = false }
-selium-abi = { version = "1.0.0-alpha.5", default-features = false }
+selium-abi = { path = "../../../selium/newkernel/crates/abi", default-features = false }
 selium-remote-client = { path = "client", version = "0.3.2" }
 selium-remote-client-protocol = { path = "protocol", version = "0.3.2" }
-selium-userland = { version = "1.0.0-alpha.5", default-features = false }
+selium-userland = { path = "../../../selium/newkernel/crates/userland", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 tokio = { version = "1.49", default-features = false }
 tracing = { version = "0.1", default-features = false }

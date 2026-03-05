@@ -1,8 +1,17 @@
 //! Guest-side switchboard helpers and re-exports.
 
+pub mod channel;
+pub mod encoding;
 pub mod messaging;
 pub mod switchboard;
 
+/// Queue/shm channel primitives.
+pub use channel::{
+    Channel, ChannelBackpressure, ChannelConfig, ChannelError, ChannelHandle, DriverError, IoFrame,
+    Reader, ReaderMode, SendOutcome, SharedChannel, Writer,
+};
+/// Payload encoding traits for switchboard messaging.
+pub use encoding::{FlatMsg, HasSchema, Schema};
 /// Messaging helpers built on the switchboard.
 pub use messaging::{
     Client, ClientTarget, ClientTargets, Fanout, Publisher, PublisherTarget, PublisherTargets,

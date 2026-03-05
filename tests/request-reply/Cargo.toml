@@ -10,19 +10,9 @@ crate-type = ["cdylib"]
 [dependencies]
 anyhow = "1.0"
 flatbuffers = "25.12"
-futures = "0.3"
-selium-atlas = { path = "../../atlas/client" }
 selium-switchboard = { path = "../../switchboard/client" }
-selium-userland = "1.0.0-alpha.5"
+selium-userland = { path = "../../../../selium/newkernel/crates/userland" }
 tracing = "0.1"
-
-[dev-dependencies]
-cargo = { version = "0.94", default-features = false, features = [
-  "http-transport-reqwest"
-] }
-selium-abi = "1.0.0-alpha.5"
-selium-remote-client = { path = "../../remote-client/client" }
-tokio = { version = "1.49", features = ["macros", "rt-multi-thread", "time"] }
 
 [build-dependencies]
 flatbuffers-build = "0.2"

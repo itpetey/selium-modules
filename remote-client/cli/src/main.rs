@@ -7,7 +7,6 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use futures::{StreamExt, pin_mut};
 use selium_remote_client::{AbiParam, AbiScalarType, AbiScalarValue, AbiSignature, Capability};
 use selium_remote_client::{ClientConfigBuilder, ClientError, Process, ProcessBuilder};
-use selium_userland::fbs::selium::logging::{self as log_fb, LogLevel};
 use tracing::field::Empty;
 use tracing::{Span, debug, error, instrument};
 use tracing_subscriber::{EnvFilter, fmt::time::SystemTime};
@@ -92,71 +91,25 @@ struct StartArgs {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum CapabilityArg {
-    #[value(alias = "SessionLifecycle")]
     SessionLifecycle,
-    #[value(alias = "ChannelLifecycle")]
-    ChannelLifecycle,
-    #[value(alias = "ChannelReader")]
-    ChannelReader,
-    #[value(alias = "ChannelWriter")]
-    ChannelWriter,
-    #[value(alias = "ProcessLifecycle")]
     ProcessLifecycle,
-    #[value(alias = "NetQuicBind")]
-    NetQuicBind,
-    #[value(alias = "NetQuicAccept")]
-    NetQuicAccept,
-    #[value(alias = "NetQuicConnect")]
-    NetQuicConnect,
-    #[value(alias = "NetQuicRead")]
-    NetQuicRead,
-    #[value(alias = "NetQuicWrite")]
-    NetQuicWrite,
-    #[value(alias = "NetHttpBind")]
-    NetHttpBind,
-    #[value(alias = "NetHttpAccept")]
-    NetHttpAccept,
-    #[value(alias = "NetHttpConnect")]
-    NetHttpConnect,
-    #[value(alias = "NetHttpRead")]
-    NetHttpRead,
-    #[value(alias = "NetHttpWrite")]
-    NetHttpWrite,
-    #[value(alias = "NetTlsServerConfig")]
-    NetTlsServerConfig,
-    #[value(alias = "NetTlsClientConfig")]
-    NetTlsClientConfig,
-    #[value(alias = "SingletonRegistry")]
-    SingletonRegistry,
-    #[value(alias = "SingletonLookup")]
-    SingletonLookup,
-    #[value(alias = "TimeRead")]
     TimeRead,
+    SharedMemory,
+    QueueLifecycle,
+    QueueWriter,
+    QueueReader,
 }
 
 impl From<CapabilityArg> for Capability {
     fn from(value: CapabilityArg) -> Self {
         match value {
             CapabilityArg::SessionLifecycle => Capability::SessionLifecycle,
-            CapabilityArg::ChannelLifecycle => Capability::ChannelLifecycle,
-            CapabilityArg::ChannelReader => Capability::ChannelReader,
-            CapabilityArg::ChannelWriter => Capability::ChannelWriter,
             CapabilityArg::ProcessLifecycle => Capability::ProcessLifecycle,
-            CapabilityArg::NetQuicBind => Capability::NetQuicBind,
-            CapabilityArg::NetQuicAccept => Capability::NetQuicAccept,
-            CapabilityArg::NetQuicConnect => Capability::NetQuicConnect,
-            CapabilityArg::NetQuicRead => Capability::NetQuicRead,
-            CapabilityArg::NetQuicWrite => Capability::NetQuicWrite,
-            CapabilityArg::NetHttpBind => Capability::NetHttpBind,
-            CapabilityArg::NetHttpAccept => Capability::NetHttpAccept,
-            CapabilityArg::NetHttpConnect => Capability::NetHttpConnect,
-            CapabilityArg::NetHttpRead => Capability::NetHttpRead,
-            CapabilityArg::NetHttpWrite => Capability::NetHttpWrite,
-            CapabilityArg::NetTlsServerConfig => Capability::NetTlsServerConfig,
-            CapabilityArg::NetTlsClientConfig => Capability::NetTlsClientConfig,
-            CapabilityArg::SingletonRegistry => Capability::SingletonRegistry,
-            CapabilityArg::SingletonLookup => Capability::SingletonLookup,
             CapabilityArg::TimeRead => Capability::TimeRead,
+            CapabilityArg::SharedMemory => Capability::SharedMemory,
+            CapabilityArg::QueueLifecycle => Capability::QueueLifecycle,
+            CapabilityArg::QueueWriter => Capability::QueueWriter,
+            CapabilityArg::QueueReader => Capability::QueueReader,
         }
     }
 }
@@ -546,61 +499,17 @@ async fn attach_logs(process: &Process) -> Result<()> {
     pin_mut!(subscriber);
     while let Some(frame) = subscriber.next().await {
         let bytes = frame.context("read log frame")?;
-        match log_fb::root_as_log_record(&bytes) {
-            Ok(record) => render_log(record),
-            Err(err) => error!(?err, "invalid log frame"),
-        }
+        render_log_frame(&bytes);
     }
 
     Ok(())
 }
 
-fn render_log(record: log_fb::LogRecord<'_>) {
-    let level = match record.level() {
-        LogLevel::Trace => "TRACE",
-        LogLevel::Debug => "DEBUG",
-        LogLevel::Info => "INFO",
-        LogLevel::Warn => "WARN",
-        LogLevel::Error => "ERROR",
-        _ => "UNKNOWN",
-    };
-    let target = record.target().unwrap_or_default();
-    let message = record.message().unwrap_or_default();
-    let spans: Vec<String> = record
-        .spans()
-        .map(|spans| {
-            spans
-                .iter()
-                .filter_map(|span| span.name().map(String::from))
-                .collect::<Vec<String>>()
-        })
-        .unwrap_or_default();
-    let fields: Vec<String> = record
-        .fields()
-        .map(|fields| {
-            fields
-                .iter()
-                .filter_map(|field| Some((field.key()?, field.value()?)))
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<String>>()
-        })
-        .unwrap_or_default();
-
-    let mut line = format!("[{level}] {target}");
-    if !spans.is_empty() {
-        line.push(' ');
-        line.push_str(&spans.join("::"));
+fn render_log_frame(bytes: &[u8]) {
+    match std::str::from_utf8(bytes) {
+        Ok(line) => println!("{line}"),
+        Err(err) => error!(?err, len = bytes.len(), "non-utf8 log frame"),
     }
-    if !message.is_empty() {
-        line.push_str(": ");
-        line.push_str(message);
-    }
-    if !fields.is_empty() {
-        line.push(' ');
-        line.push_str(&fields.join(" "));
-    }
-
-    println!("{line}");
 }
 
 #[cfg(test)]

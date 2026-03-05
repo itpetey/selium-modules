@@ -1,84 +1,35 @@
 //! Guest-side Atlas helpers and re-exports.
 
-#[cfg(feature = "switchboard")]
-use std::future::Future;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
 
-use futures::{FutureExt, SinkExt, StreamExt, future::BoxFuture};
 /// Flatbuffers protocol helpers for Atlas control messages.
 pub use selium_atlas_protocol as protocol;
 /// Atlas protocol types for convenience.
 pub use selium_atlas_protocol::{AtlasId, uri::Uri};
 use selium_atlas_protocol::{Message, ProtocolError, decode_message, encode_message};
-#[cfg(feature = "switchboard")]
-use selium_switchboard::{
-    Client, Fanout, Publisher, Server, Subscriber, Switchboard, SwitchboardError,
-};
-use selium_userland::{
-    Context, Dependency, DependencyDescriptor, dependency_id,
-    io::{Channel, DriverError, SharedChannel},
-    logging::{InitError, LogUriRegistrar, set_log_uri_registrar},
-};
+use selium_switchboard::{Channel, ChannelError, SharedChannel};
 use thiserror::Error;
 use tracing::debug;
 
 const REQUEST_CHUNK_SIZE: u32 = 64 * 1024;
 const RESPONSE_CHANNEL_CAPACITY: u32 = 16 * 1024;
 
-/// Convenience extension for wiring publisher results to Atlas matches.
-#[cfg(feature = "switchboard")]
-pub trait PublisherAtlasExt {
-    /// Connect this `Publisher` to any existing subscribers matching the given pattern.
-    fn matching(
-        &self,
-        atlas: &Atlas,
-        switchboard: &Switchboard,
-        pattern: &str,
-    ) -> impl Future<Output = Result<(), AtlasError>>;
-}
-
-/// Convenience extension for wiring Atlas matches into a subscriber.
-#[cfg(feature = "switchboard")]
-pub trait SubscriberAtlasExt {
-    /// Connect this `Subscriber` to any existing publishers matching the given pattern.
-    fn connect(
-        &self,
-        atlas: &Atlas,
-        switchboard: &Switchboard,
-        pattern: &str,
-    ) -> impl Future<Output = Result<(), AtlasError>>;
-}
-
-/// Convenience extension for wiring Atlas matches into a server.
-#[cfg(feature = "switchboard")]
-pub trait ServerAtlasExt {
-    /// Accept connections from any existing clients matching the given pattern.
-    fn accept(
-        &self,
-        atlas: &Atlas,
-        switchboard: &Switchboard,
-        pattern: &str,
-    ) -> impl Future<Output = Result<(), AtlasError>>;
-}
-
 /// Atlas front-end that guests use to look up endpoints.
 #[derive(Clone)]
 pub struct Atlas {
-    request_channel: Channel,
+    request_channel: Arc<Channel>,
     next_request_id: Arc<AtomicU64>,
 }
-
-struct AtlasLogUriRegistrar;
 
 /// Errors produced by the Atlas client.
 #[derive(Error, Debug)]
 pub enum AtlasError {
-    /// Driver returned an error while creating or destroying channels.
-    #[error("driver error: {0}")]
-    Driver(#[from] DriverError),
+    /// Channel I/O failed.
+    #[error("channel error: {0}")]
+    Channel(#[from] ChannelError),
     /// Control-plane protocol could not be decoded.
     #[error("protocol error: {0}")]
     Protocol(#[from] ProtocolError),
@@ -88,10 +39,6 @@ pub enum AtlasError {
     /// The Atlas response channel was closed.
     #[error("endpoint closed")]
     EndpointClosed,
-    /// Switchboard error while wiring Atlas results.
-    #[cfg(feature = "switchboard")]
-    #[error("switchboard error: {0}")]
-    Switchboard(#[from] SwitchboardError),
 }
 
 impl Atlas {
@@ -99,7 +46,7 @@ impl Atlas {
     pub async fn attach(request_channel: SharedChannel) -> Result<Self, AtlasError> {
         let request_channel = Channel::attach_shared(request_channel).await?;
         Ok(Self {
-            request_channel,
+            request_channel: Arc::new(request_channel),
             next_request_id: Arc::new(AtomicU64::new(1)),
         })
     }
@@ -110,7 +57,7 @@ impl Atlas {
             .send_request(|request_id, reply_channel| Message::GetRequest {
                 request_id,
                 uri: uri.clone(),
-                reply_channel,
+                reply_channel: reply_channel.raw(),
             })
             .await?;
 
@@ -128,7 +75,7 @@ impl Atlas {
                 request_id,
                 uri,
                 id,
-                reply_channel,
+                reply_channel: reply_channel.raw(),
             })
             .await?;
 
@@ -145,7 +92,7 @@ impl Atlas {
             .send_request(|request_id, reply_channel| Message::RemoveRequest {
                 request_id,
                 uri: uri.clone(),
-                reply_channel,
+                reply_channel: reply_channel.raw(),
             })
             .await?;
 
@@ -162,7 +109,7 @@ impl Atlas {
             .send_request(|request_id, reply_channel| Message::LookupRequest {
                 request_id,
                 pattern: pattern.to_string(),
-                reply_channel,
+                reply_channel: reply_channel.raw(),
             })
             .await?;
 
@@ -175,174 +122,27 @@ impl Atlas {
 
     async fn send_request<F>(&self, build: F) -> Result<Message, AtlasError>
     where
-        F: FnOnce(u64, u64) -> Message,
+        F: FnOnce(u64, SharedChannel) -> Message,
     {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let response_channel = Channel::create(RESPONSE_CHANNEL_CAPACITY).await?;
         let response_shared = response_channel.share().await?;
         let mut response_reader = response_channel.subscribe(REQUEST_CHUNK_SIZE).await?;
 
-        let message = build(request_id, response_shared.raw());
+        let message = build(request_id, response_shared);
         debug!(request_id, "atlas: sending request");
         let bytes = encode_message(&message)?;
         let mut writer = self.request_channel.publish_weak().await?;
         writer.send(bytes).await?;
         debug!(request_id, "atlas: request sent");
 
-        let response = match response_reader.next().await {
-            Some(Ok(frame)) => decode_message(&frame.payload)?,
-            Some(Err(err)) => return Err(AtlasError::Driver(err)),
+        let response = match response_reader.read_next().await? {
+            Some(frame) => decode_message(&frame.payload)?,
             None => return Err(AtlasError::EndpointClosed),
         };
         debug!(request_id, "atlas: received response");
 
         response_channel.delete().await?;
-
         Ok(response)
-    }
-}
-
-impl Dependency for Atlas {
-    type Handle = SharedChannel;
-    type Error = AtlasError;
-
-    const DESCRIPTOR: DependencyDescriptor = DependencyDescriptor {
-        name: "selium::Atlas",
-        id: dependency_id!("selium.atlas.singleton"),
-    };
-
-    async fn from_handle(handle: Self::Handle) -> Result<Self, Self::Error> {
-        Atlas::attach(handle).await
-    }
-}
-
-impl LogUriRegistrar for AtlasLogUriRegistrar {
-    fn register<'a>(
-        &'a self,
-        log_uri: &'a str,
-        shared: SharedChannel,
-    ) -> BoxFuture<'a, Result<(), InitError>> {
-        async move {
-            let atlas = Context::current()
-                .singleton::<Atlas>()
-                .await
-                .map_err(|err| InitError::Register(format!("atlas lookup failed: {err}")))?;
-            let uri = Uri::parse(log_uri)
-                .map_err(|err| InitError::Register(format!("atlas log URI invalid: {err}")))?;
-            atlas
-                .insert(uri, shared.raw())
-                .await
-                .map_err(|err| InitError::Register(format!("atlas registration failed: {err}")))?;
-            Ok(())
-        }
-        .boxed()
-    }
-}
-
-/// Install the Atlas-backed log URI registrar for userland logging.
-pub fn install_log_uri_registrar() -> Result<(), InitError> {
-    set_log_uri_registrar(Box::new(AtlasLogUriRegistrar))
-}
-
-#[cfg(feature = "switchboard")]
-impl<T> PublisherAtlasExt for Fanout<T> {
-    async fn matching(
-        &self,
-        atlas: &Atlas,
-        switchboard: &Switchboard,
-        pattern: &str,
-    ) -> Result<(), AtlasError> {
-        let ids = atlas.lookup(pattern).await?;
-        for id in ids {
-            switchboard
-                .connect_ids(self.endpoint_id(), id as u32)
-                .await?;
-        }
-
-        Ok(())
-    }
-}
-
-#[cfg(feature = "switchboard")]
-impl<T> PublisherAtlasExt for Publisher<T> {
-    async fn matching(
-        &self,
-        atlas: &Atlas,
-        switchboard: &Switchboard,
-        pattern: &str,
-    ) -> Result<(), AtlasError> {
-        let ids = atlas.lookup(pattern).await?;
-        for id in ids {
-            switchboard
-                .connect_ids(self.endpoint_id(), id as u32)
-                .await?;
-        }
-
-        Ok(())
-    }
-}
-
-#[cfg(feature = "switchboard")]
-impl<T> SubscriberAtlasExt for Subscriber<T> {
-    async fn connect(
-        &self,
-        atlas: &Atlas,
-        switchboard: &Switchboard,
-        pattern: &str,
-    ) -> Result<(), AtlasError> {
-        let ids = atlas.lookup(pattern).await?;
-        for id in ids {
-            switchboard
-                .connect_ids(id as u32, self.endpoint_id())
-                .await?;
-        }
-
-        Ok(())
-    }
-}
-
-#[cfg(feature = "switchboard")]
-impl<Req, Rep> SubscriberAtlasExt for Client<Req, Rep> {
-    async fn connect(
-        &self,
-        atlas: &Atlas,
-        switchboard: &Switchboard,
-        pattern: &str,
-    ) -> Result<(), AtlasError> {
-        let ids = atlas.lookup(pattern).await?;
-        for id in ids {
-            let server_id = id as u32;
-            switchboard
-                .connect_ids(self.endpoint_id(), server_id)
-                .await?;
-            switchboard
-                .connect_ids(server_id, self.endpoint_id())
-                .await?;
-        }
-
-        Ok(())
-    }
-}
-
-#[cfg(feature = "switchboard")]
-impl<Req, Rep> ServerAtlasExt for Server<Req, Rep> {
-    async fn accept(
-        &self,
-        atlas: &Atlas,
-        switchboard: &Switchboard,
-        pattern: &str,
-    ) -> Result<(), AtlasError> {
-        let ids = atlas.lookup(pattern).await?;
-        for id in ids {
-            let client_id = id as u32;
-            switchboard
-                .connect_ids(client_id, self.endpoint_id())
-                .await?;
-            switchboard
-                .connect_ids(self.endpoint_id(), client_id)
-                .await?;
-        }
-
-        Ok(())
     }
 }

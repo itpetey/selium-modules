@@ -13,7 +13,7 @@ use std::{
     },
 };
 
-use futures::{Future, SinkExt, Stream, StreamExt};
+use futures::Future;
 pub use selium_switchboard_protocol::{AdoptMode, Backpressure, Cardinality, EndpointId};
 use selium_switchboard_protocol::{
     Direction, EndpointDirections, Message, ProtocolError, WiringEgress, WiringIngress,
@@ -22,14 +22,16 @@ use selium_switchboard_protocol::{
 use thiserror::Error;
 use tracing::{debug, warn};
 
-use selium_userland::{
-    Dependency, DependencyDescriptor, dependency_id,
+use crate::{
+    channel::{Channel, ChannelError, ChannelHandle, IoFrame, Reader, SharedChannel, Writer},
     encoding::{FlatMsg, HasSchema},
-    io::{Channel, ChannelHandle, DriverError, Reader, SharedChannel, Writer},
 };
 
 type PendingWiring<In, Out> =
     Pin<Box<dyn Future<Output = Result<EndpointWiring<In, Out>, SwitchboardError>>>>;
+type PendingRead = Pin<Box<dyn Future<Output = (Reader, Result<Option<IoFrame>, ChannelError>)>>>;
+type PendingWrite = Pin<Box<dyn Future<Output = (Writer, Result<(), ChannelError>)>>>;
+type PendingClose = Pin<Box<dyn Future<Output = Result<(), ChannelError>>>>;
 
 struct PendingUpdate<In, Out> {
     future: PendingWiring<In, Out>,
@@ -47,9 +49,9 @@ const DATA_CHUNK_SIZE: u32 = 64 * 1024;
 /// Errors produced by the switchboard client.
 #[derive(Debug, Error)]
 pub enum SwitchboardError {
-    /// Driver returned an error while creating or destroying channels.
-    #[error("driver error: {0}")]
-    Driver(#[from] DriverError),
+    /// Channel I/O operation failed.
+    #[error("channel error: {0}")]
+    Channel(#[from] ChannelError),
     /// Control-plane protocol could not be decoded.
     #[error("protocol error: {0}")]
     Protocol(#[from] ProtocolError),
@@ -65,6 +67,9 @@ pub enum SwitchboardError {
     /// Internal switchboard state was unavailable.
     #[error("switchboard state unavailable")]
     StateUnavailable,
+    /// Payload decoding failed.
+    #[error("payload decode error: {0}")]
+    Decode(String),
 }
 
 /// Switchboard front-end that guests use to register endpoints.
@@ -98,7 +103,8 @@ pub struct EndpointBuilder<In, Out> {
 /// Registered endpoint that implements `Stream` for inbound frames and `Sink` for outbound frames.
 pub struct EndpointHandle<In, Out> {
     id: EndpointId,
-    updates: Reader,
+    updates: Option<Reader>,
+    pending_updates_read: Option<PendingRead>,
     pending: Option<PendingUpdate<In, Out>>,
     last_inbound: Vec<WiringIngress>,
     last_outbound: Vec<WiringEgress>,
@@ -132,13 +138,17 @@ struct EndpointWiring<In, Out> {
 
 /// Publisher that encodes typed payloads onto a channel.
 pub struct RawPublisher<T> {
-    writer: Writer,
+    writer: Option<Writer>,
+    queued_payload: Option<Vec<u8>>,
+    pending_write: Option<PendingWrite>,
+    pending_close: Option<PendingClose>,
     _marker: PhantomData<T>,
 }
 
 /// Subscriber that decodes typed payloads from a channel.
 pub struct RawSubscriber<T> {
-    reader: Reader,
+    reader: Option<Reader>,
+    pending_read: Option<PendingRead>,
     _marker: PhantomData<T>,
 }
 
@@ -312,9 +322,8 @@ impl Switchboard {
         writer.send(bytes).await?;
         debug!(request_id, "switchboard: request sent");
 
-        let response = match response_reader.next().await {
-            Some(Ok(frame)) => decode_message(&frame.payload)?,
-            Some(Err(err)) => return Err(SwitchboardError::Driver(err)),
+        let response = match response_reader.read_next().await? {
+            Some(frame) => decode_message(&frame.payload)?,
             None => return Err(SwitchboardError::EndpointClosed),
         };
         debug!(request_id, "switchboard: received response");
@@ -354,20 +363,6 @@ impl Switchboard {
         self.state
             .lock()
             .map_err(|_| SwitchboardError::StateUnavailable)
-    }
-}
-
-impl Dependency for Switchboard {
-    type Handle = SharedChannel;
-    type Error = SwitchboardError;
-
-    const DESCRIPTOR: DependencyDescriptor = DependencyDescriptor {
-        name: "selium::Switchboard",
-        id: dependency_id!("selium.switchboard.singleton"),
-    };
-
-    async fn from_handle(handle: Self::Handle) -> Result<Self, Self::Error> {
-        Switchboard::attach(handle).await
     }
 }
 
@@ -418,7 +413,8 @@ where
 
         Ok(EndpointHandle {
             id: endpoint_id,
-            updates,
+            updates: Some(updates),
+            pending_updates_read: None,
             pending: None,
             last_inbound: Vec::new(),
             last_outbound: Vec::new(),
@@ -455,6 +451,35 @@ where
     In: FlatMsg + Send + Unpin + 'static,
     Out: FlatMsg + Send + Unpin + 'static,
 {
+    fn poll_update_frame(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Option<IoFrame>, ChannelError>> {
+        if self.pending_updates_read.is_none() {
+            let Some(reader) = self.updates.take() else {
+                return Poll::Ready(Ok(None));
+            };
+            self.pending_updates_read = Some(Box::pin(async move {
+                let mut reader = reader;
+                let result = reader.read_next().await;
+                (reader, result)
+            }));
+        }
+
+        let Some(future) = self.pending_updates_read.as_mut() else {
+            return Poll::Pending;
+        };
+
+        match future.as_mut().poll(cx) {
+            Poll::Ready((reader, result)) => {
+                self.pending_updates_read = None;
+                self.updates = Some(reader);
+                Poll::Ready(result)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
     pub(crate) fn poll_updates(&mut self, cx: &mut Context<'_>) -> Result<(), SwitchboardError> {
         loop {
             let mut completed = None;
@@ -485,8 +510,8 @@ where
                 }
             }
 
-            match Pin::new(&mut self.updates).poll_next(cx) {
-                Poll::Ready(Some(Ok(frame))) => {
+            match self.poll_update_frame(cx) {
+                Poll::Ready(Ok(Some(frame))) => {
                     if frame.payload.is_empty() {
                         continue;
                     }
@@ -532,8 +557,8 @@ where
                         });
                     }
                 }
-                Poll::Ready(Some(Err(err))) => return Err(SwitchboardError::Driver(err)),
-                Poll::Ready(None) => return Err(SwitchboardError::EndpointClosed),
+                Poll::Ready(Err(err)) => return Err(SwitchboardError::Channel(err)),
+                Poll::Ready(Ok(None)) => return Err(SwitchboardError::EndpointClosed),
                 Poll::Pending => break,
             }
         }
@@ -572,7 +597,10 @@ where
 impl<T> RawPublisher<T> {
     fn new(writer: Writer) -> Self {
         Self {
-            writer,
+            writer: Some(writer),
+            queued_payload: None,
+            pending_write: None,
+            pending_close: None,
             _marker: PhantomData,
         }
     }
@@ -584,13 +612,69 @@ impl<T> RawPublisher<T> {
         let writer = channel.publish_weak().await?;
         Ok(Self::new(writer))
     }
+
+    fn poll_write(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), SwitchboardError>> {
+        loop {
+            if let Some(write) = self.pending_write.as_mut() {
+                match write.as_mut().poll(cx) {
+                    Poll::Ready((writer, result)) => {
+                        self.pending_write = None;
+                        self.writer = Some(writer);
+                        result.map_err(SwitchboardError::Channel)?;
+                        continue;
+                    }
+                    Poll::Pending => return Poll::Pending,
+                }
+            }
+
+            let Some(payload) = self.queued_payload.take() else {
+                return Poll::Ready(Ok(()));
+            };
+
+            let Some(writer) = self.writer.take() else {
+                return Poll::Ready(Err(SwitchboardError::EndpointClosed));
+            };
+            self.pending_write = Some(Box::pin(async move {
+                let mut writer = writer;
+                let result = writer.send(payload).await.map(|_| ());
+                (writer, result)
+            }));
+        }
+    }
 }
 
 impl<T> RawSubscriber<T> {
     fn new(reader: Reader) -> Self {
         Self {
-            reader,
+            reader: Some(reader),
+            pending_read: None,
             _marker: PhantomData,
+        }
+    }
+
+    fn poll_read(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<IoFrame>, ChannelError>> {
+        if self.pending_read.is_none() {
+            let Some(reader) = self.reader.take() else {
+                return Poll::Ready(Ok(None));
+            };
+            self.pending_read = Some(Box::pin(async move {
+                let mut reader = reader;
+                let result = reader.read_next().await;
+                (reader, result)
+            }));
+        }
+
+        let Some(read) = self.pending_read.as_mut() else {
+            return Poll::Pending;
+        };
+
+        match read.as_mut().poll(cx) {
+            Poll::Ready((reader, result)) => {
+                self.pending_read = None;
+                self.reader = Some(reader);
+                Poll::Ready(result)
+            }
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -602,32 +686,62 @@ where
     type Error = SwitchboardError;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match Pin::new(&mut self.get_mut().writer).poll_ready(cx) {
-            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(err)) => Poll::Ready(Err(SwitchboardError::Driver(err))),
-            Poll::Pending => Poll::Pending,
+        let this = self.get_mut();
+        if this.pending_close.is_some() {
+            return Poll::Ready(Err(SwitchboardError::EndpointClosed));
         }
+        this.poll_write(cx)
     }
 
     fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
-        let encoded = FlatMsg::encode(&item);
-        Pin::new(&mut self.get_mut().writer)
-            .start_send(encoded)
-            .map_err(SwitchboardError::Driver)
+        let this = self.get_mut();
+        if this.pending_close.is_some() {
+            return Err(SwitchboardError::EndpointClosed);
+        }
+        if this.queued_payload.is_some() || this.pending_write.is_some() {
+            return Err(SwitchboardError::StateUnavailable);
+        }
+        if this.writer.is_none() {
+            return Err(SwitchboardError::EndpointClosed);
+        }
+
+        this.queued_payload = Some(FlatMsg::encode(&item));
+        Ok(())
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match Pin::new(&mut self.get_mut().writer).poll_flush(cx) {
-            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(err)) => Poll::Ready(Err(SwitchboardError::Driver(err))),
-            Poll::Pending => Poll::Pending,
+        let this = self.get_mut();
+        if this.pending_close.is_some() {
+            return Poll::Ready(Err(SwitchboardError::EndpointClosed));
         }
+        this.poll_write(cx)
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match Pin::new(&mut self.get_mut().writer).poll_close(cx) {
-            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(err)) => Poll::Ready(Err(SwitchboardError::Driver(err))),
+        let this = self.get_mut();
+        match this.poll_write(cx) {
+            Poll::Ready(Ok(())) => {}
+            Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+            Poll::Pending => return Poll::Pending,
+        }
+
+        if this.pending_close.is_none() {
+            if let Some(writer) = this.writer.take() {
+                this.pending_close = Some(Box::pin(async move { writer.close().await }));
+            } else {
+                return Poll::Ready(Ok(()));
+            }
+        }
+
+        let Some(close) = this.pending_close.as_mut() else {
+            return Poll::Ready(Ok(()));
+        };
+        match close.as_mut().poll(cx) {
+            Poll::Ready(result) => {
+                this.pending_close = None;
+                result.map_err(SwitchboardError::Channel)?;
+                Poll::Ready(Ok(()))
+            }
             Poll::Pending => Poll::Pending,
         }
     }
@@ -640,14 +754,14 @@ where
     type Item = Result<T, SwitchboardError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match Pin::new(&mut self.get_mut().reader).poll_next(cx) {
-            Poll::Ready(Some(Ok(frame))) => {
-                let decoded =
-                    T::decode(&frame.payload).map_err(|err| SwitchboardError::Protocol(err.into()));
+        match self.get_mut().poll_read(cx) {
+            Poll::Ready(Ok(Some(frame))) => {
+                let decoded = T::decode(&frame.payload)
+                    .map_err(|err| SwitchboardError::Decode(err.to_string()));
                 Poll::Ready(Some(decoded))
             }
-            Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(SwitchboardError::Driver(err)))),
-            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(Err(err)) => Poll::Ready(Some(Err(SwitchboardError::Channel(err)))),
+            Poll::Ready(Ok(None)) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
     }
@@ -661,7 +775,7 @@ where
 {
     let mut inbound_links = Vec::with_capacity(inbound.len());
     for ingress in inbound {
-        let shared = unsafe { SharedChannel::from_raw(ingress.channel) };
+        let shared = SharedChannel::from_raw(ingress.channel);
         let channel = Channel::attach_shared(shared).await?;
         let reader = channel.subscribe(DATA_CHUNK_SIZE).await?;
         inbound_links.push(InboundLink {
@@ -681,7 +795,7 @@ where
     let mut outbound_links = Vec::with_capacity(outbound.len());
     let mut outbound_map = HashMap::with_capacity(outbound.len());
     for egress in outbound {
-        let shared = unsafe { SharedChannel::from_raw(egress.channel) };
+        let shared = SharedChannel::from_raw(egress.channel);
         let channel = Channel::attach_shared(shared).await?;
         let writer = channel.publish_weak().await?;
         outbound_map.insert(egress.to, channel.handle());
@@ -718,15 +832,19 @@ fn spawn_dispatcher(reader: Reader, state: Arc<Mutex<ClientState>>) {
 }
 
 async fn drive_updates(mut reader: Reader, state: Arc<Mutex<ClientState>>) {
-    while let Some(frame) = reader.next().await {
-        let payload = match frame {
-            Ok(frame) if frame.payload.is_empty() => continue,
-            Ok(frame) => frame.payload,
+    loop {
+        let frame = match reader.read_next().await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => break,
             Err(err) => {
                 warn!(?err, "switchboard: update stream failed");
                 break;
             }
         };
+        if frame.payload.is_empty() {
+            continue;
+        }
+        let payload = frame.payload;
 
         let message = match decode_message(&payload) {
             Ok(message) => message,
@@ -787,7 +905,7 @@ async fn drive_updates(mut reader: Reader, state: Arc<Mutex<ClientState>>) {
     }
 }
 
-async fn forward_bytes(channel: Channel, payload: Vec<u8>) -> Result<(), DriverError> {
+async fn forward_bytes(channel: Channel, payload: Vec<u8>) -> Result<(), ChannelError> {
     let mut writer = channel.publish_weak().await?;
     writer.send(payload).await?;
     Ok(())
@@ -878,7 +996,7 @@ async fn run_local_service(request_channel: SharedChannel) -> Result<(), Switchb
             directions: EndpointDirections,
             updates_channel: u64,
         ) -> Result<(), SwitchboardError> {
-            let updates_channel = unsafe { SharedChannel::from_raw(updates_channel) };
+            let updates_channel = SharedChannel::from_raw(updates_channel);
             let updates_writer = Channel::attach_shared(updates_channel)
                 .await?
                 .publish_weak()
@@ -909,7 +1027,7 @@ async fn run_local_service(request_channel: SharedChannel) -> Result<(), Switchb
             to: EndpointId,
             reply_channel: u64,
         ) -> Result<(), SwitchboardError> {
-            let reply_channel = unsafe { SharedChannel::from_raw(reply_channel) };
+            let reply_channel = SharedChannel::from_raw(reply_channel);
             if let Err(err) = self.core.add_intent(from, to) {
                 self.send_error(reply_channel, request_id, err.into())
                     .await?;
@@ -992,7 +1110,7 @@ async fn run_local_service(request_channel: SharedChannel) -> Result<(), Switchb
                 }
             }
 
-            for entry in available {
+            for mut entry in available {
                 if let Err(err) = entry.channel.drain().await {
                     warn!(?err, "switchboard: failed to drain channel");
                 }
@@ -1074,17 +1192,12 @@ async fn run_local_service(request_channel: SharedChannel) -> Result<(), Switchb
 
     let mut service = LocalService::new();
 
-    while let Some(frame) = reader.next().await {
-        match frame {
-            Ok(frame) => {
-                if frame.payload.is_empty() {
-                    continue;
-                }
-                let message = decode_message(&frame.payload)?;
-                service.handle_message(message).await?;
-            }
-            Err(err) => return Err(SwitchboardError::Driver(err)),
+    while let Some(frame) = reader.read_next().await? {
+        if frame.payload.is_empty() {
+            continue;
         }
+        let message = decode_message(&frame.payload)?;
+        service.handle_message(message).await?;
     }
 
     Ok(())

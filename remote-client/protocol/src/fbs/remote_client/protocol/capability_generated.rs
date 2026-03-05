@@ -5,30 +5,17 @@ use super::*;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_CAPABILITY: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_CAPABILITY: u8 = 19;
+pub const ENUM_MAX_CAPABILITY: u8 = 6;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_CAPABILITY: [Capability; 20] = [
+pub const ENUM_VALUES_CAPABILITY: [Capability; 7] = [
   Capability::SessionLifecycle,
-  Capability::ChannelLifecycle,
-  Capability::ChannelReader,
-  Capability::ChannelWriter,
   Capability::ProcessLifecycle,
-  Capability::NetQuicBind,
-  Capability::NetQuicAccept,
-  Capability::NetQuicConnect,
-  Capability::NetQuicRead,
-  Capability::NetQuicWrite,
-  Capability::NetHttpBind,
-  Capability::NetHttpAccept,
-  Capability::NetHttpConnect,
-  Capability::NetHttpRead,
-  Capability::NetHttpWrite,
-  Capability::NetTlsServerConfig,
-  Capability::NetTlsClientConfig,
-  Capability::SingletonRegistry,
-  Capability::SingletonLookup,
   Capability::TimeRead,
+  Capability::SharedMemory,
+  Capability::QueueLifecycle,
+  Capability::QueueWriter,
+  Capability::QueueReader,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -37,73 +24,34 @@ pub struct Capability(pub u8);
 #[allow(non_upper_case_globals)]
 impl Capability {
   pub const SessionLifecycle: Self = Self(0);
-  pub const ChannelLifecycle: Self = Self(1);
-  pub const ChannelReader: Self = Self(2);
-  pub const ChannelWriter: Self = Self(3);
-  pub const ProcessLifecycle: Self = Self(4);
-  pub const NetQuicBind: Self = Self(5);
-  pub const NetQuicAccept: Self = Self(6);
-  pub const NetQuicConnect: Self = Self(7);
-  pub const NetQuicRead: Self = Self(8);
-  pub const NetQuicWrite: Self = Self(9);
-  pub const NetHttpBind: Self = Self(10);
-  pub const NetHttpAccept: Self = Self(11);
-  pub const NetHttpConnect: Self = Self(12);
-  pub const NetHttpRead: Self = Self(13);
-  pub const NetHttpWrite: Self = Self(14);
-  pub const NetTlsServerConfig: Self = Self(15);
-  pub const NetTlsClientConfig: Self = Self(16);
-  pub const SingletonRegistry: Self = Self(17);
-  pub const SingletonLookup: Self = Self(18);
-  pub const TimeRead: Self = Self(19);
+  pub const ProcessLifecycle: Self = Self(1);
+  pub const TimeRead: Self = Self(2);
+  pub const SharedMemory: Self = Self(3);
+  pub const QueueLifecycle: Self = Self(4);
+  pub const QueueWriter: Self = Self(5);
+  pub const QueueReader: Self = Self(6);
 
   pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 19;
+  pub const ENUM_MAX: u8 = 6;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::SessionLifecycle,
-    Self::ChannelLifecycle,
-    Self::ChannelReader,
-    Self::ChannelWriter,
     Self::ProcessLifecycle,
-    Self::NetQuicBind,
-    Self::NetQuicAccept,
-    Self::NetQuicConnect,
-    Self::NetQuicRead,
-    Self::NetQuicWrite,
-    Self::NetHttpBind,
-    Self::NetHttpAccept,
-    Self::NetHttpConnect,
-    Self::NetHttpRead,
-    Self::NetHttpWrite,
-    Self::NetTlsServerConfig,
-    Self::NetTlsClientConfig,
-    Self::SingletonRegistry,
-    Self::SingletonLookup,
     Self::TimeRead,
+    Self::SharedMemory,
+    Self::QueueLifecycle,
+    Self::QueueWriter,
+    Self::QueueReader,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
     match self {
       Self::SessionLifecycle => Some("SessionLifecycle"),
-      Self::ChannelLifecycle => Some("ChannelLifecycle"),
-      Self::ChannelReader => Some("ChannelReader"),
-      Self::ChannelWriter => Some("ChannelWriter"),
       Self::ProcessLifecycle => Some("ProcessLifecycle"),
-      Self::NetQuicBind => Some("NetQuicBind"),
-      Self::NetQuicAccept => Some("NetQuicAccept"),
-      Self::NetQuicConnect => Some("NetQuicConnect"),
-      Self::NetQuicRead => Some("NetQuicRead"),
-      Self::NetQuicWrite => Some("NetQuicWrite"),
-      Self::NetHttpBind => Some("NetHttpBind"),
-      Self::NetHttpAccept => Some("NetHttpAccept"),
-      Self::NetHttpConnect => Some("NetHttpConnect"),
-      Self::NetHttpRead => Some("NetHttpRead"),
-      Self::NetHttpWrite => Some("NetHttpWrite"),
-      Self::NetTlsServerConfig => Some("NetTlsServerConfig"),
-      Self::NetTlsClientConfig => Some("NetTlsClientConfig"),
-      Self::SingletonRegistry => Some("SingletonRegistry"),
-      Self::SingletonLookup => Some("SingletonLookup"),
       Self::TimeRead => Some("TimeRead"),
+      Self::SharedMemory => Some("SharedMemory"),
+      Self::QueueLifecycle => Some("QueueLifecycle"),
+      Self::QueueWriter => Some("QueueWriter"),
+      Self::QueueReader => Some("QueueReader"),
       _ => None,
     }
   }

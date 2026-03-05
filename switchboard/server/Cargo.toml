@@ -17,6 +17,7 @@ crate-type = ["cdylib"]
 [dependencies]
 anyhow = { workspace = true }
 futures = { workspace = true, features = ["std"] }
+selium-switchboard = { path = "../client", version = "0.4.2" }
 selium-switchboard-core = { workspace = true }
 selium-switchboard-protocol = { workspace = true }
 selium-userland = { workspace = true }

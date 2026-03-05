@@ -483,7 +483,11 @@ impl ProcessBuilder {
             module_id: module_id.into(),
             entrypoint: entrypoint.into(),
             log_uri: None,
-            capabilities: vec![Capability::ChannelLifecycle, Capability::ChannelWriter],
+            capabilities: vec![
+                Capability::QueueLifecycle,
+                Capability::QueueWriter,
+                Capability::SharedMemory,
+            ],
             signature: AbiSignature::new(Vec::new(), Vec::new()),
             args: Vec::new(),
         }

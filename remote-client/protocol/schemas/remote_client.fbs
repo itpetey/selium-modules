@@ -3,25 +3,12 @@ namespace remote_client.protocol;
 
 enum Capability: ubyte {
   SessionLifecycle = 0,
-  ChannelLifecycle = 1,
-  ChannelReader = 2,
-  ChannelWriter = 3,
-  ProcessLifecycle = 4,
-  NetQuicBind = 5,
-  NetQuicAccept = 6,
-  NetQuicConnect = 7,
-  NetQuicRead = 8,
-  NetQuicWrite = 9,
-  NetHttpBind = 10,
-  NetHttpAccept = 11,
-  NetHttpConnect = 12,
-  NetHttpRead = 13,
-  NetHttpWrite = 14,
-  NetTlsServerConfig = 15,
-  NetTlsClientConfig = 16,
-  SingletonRegistry = 17,
-  SingletonLookup = 18,
-  TimeRead = 19,
+  ProcessLifecycle = 1,
+  TimeRead = 2,
+  SharedMemory = 3,
+  QueueLifecycle = 4,
+  QueueWriter = 5,
+  QueueReader = 6,
 }
 
 enum AbiScalarType: ubyte {

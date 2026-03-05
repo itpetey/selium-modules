@@ -1,28 +1,20 @@
 # Switchboard
 
-The switchboard service provides an orchestration layer on top of core I/O. It provides realtime rationalising of channel infrastructure as the environment changes (e.g. a new subscriber being created, or a service being shut down), as well as a more ergonomic messaging library.
+Switchboard now owns Selium's core queue/shm I/O primitives. The `selium-switchboard`
+crate provides queue-synchronised channels backed by host-managed shared memory.
 
 ## Crate structure
 
-This service has 4 crates:
-- `selium-switchboard` (_client/_) - client library that guests consume
-- `selium-switchboard-core` (_core/_) - core logic
-- `selium-switchboard-protocol` (_protocol/_) - wire protocol
-- `selium-switchboard-server` (_server/_) - WASM module run by the host
+This workspace has 4 crates:
+- `selium-switchboard` (_client/_) - queue/shm I/O primitives plus endpoint/messaging helpers
+- `selium-switchboard-core` (_core/_) - graph solver logic
+- `selium-switchboard-protocol` (_protocol/_) - switchboard wire protocol types
+- `selium-switchboard-server` (_server/_) - switchboard service entrypoint using queue/shm channels
 
 ## Usage
 
-Compile the `selium-switchboard-server` component to WebAssembly and install in the Runtime's work directory:
+Use `selium-switchboard` directly from guest modules and exchange `SharedChannel`
+handles between processes as needed.
 
-```bash
-cargo build --release --target wasm32-unknown-unknown -p selium-switchboard-server
-cp target/wasm32-unknown-unknown/release/selium_switchboard_server.wasm /path/to/selium-runtime/work/modules/
-```
-
-The `selium-switchboard-server` component should be added to the Selium Runtime's initialisation args:
-
-```bash
-selium-runtime \
-  --work-dir /path/to/selium-runtime/work \
-  --module "path=selium_switchboard_server.wasm;capabilities=ChannelLifecycle,ChannelReader,ChannelWriter,SingletonRegistry"
-```
+The server entrypoint now expects the request channel shared id as its first
+argument (`start(request_channel: u64)`).

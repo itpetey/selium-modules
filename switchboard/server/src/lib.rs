@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use futures::{SinkExt, StreamExt};
+use selium_switchboard::{Channel, ChannelBackpressure, ChannelError, SharedChannel, Writer};
 use selium_switchboard_core::{
     ChannelKey, SwitchboardCore, SwitchboardError as CoreError, best_compatible_match,
 };
@@ -11,23 +11,18 @@ use selium_switchboard_protocol::{
     AdoptMode, Backpressure, Cardinality, EndpointDirections, EndpointId, Message, ProtocolError,
     WiringEgress, WiringIngress, decode_message, encode_message,
 };
-use selium_userland::{
-    DependencyId, dependency_id, entrypoint,
-    io::{Channel, ChannelBackpressure, DriverError, SharedChannel, Writer},
-    singleton, spawn,
-};
+use selium_userland::{entrypoint, spawn};
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 
 const REQUEST_CHUNK_SIZE: u32 = 64 * 1024;
 const CHANNEL_CAPACITY: u32 = 64 * 1024;
 const TAP_CHUNK_SIZE: u32 = 64 * 1024;
-const SWITCHBOARD_SINGLETON_ID: DependencyId = dependency_id!("selium.switchboard.singleton");
 
 #[derive(Debug, Error)]
 enum SwitchboardServiceError {
-    #[error("driver error: {0}")]
-    Driver(#[from] DriverError),
+    #[error("channel error: {0}")]
+    Channel(#[from] ChannelError),
     #[error("protocol error: {0}")]
     Protocol(#[from] ProtocolError),
     #[error("solver error: {0}")]
@@ -79,25 +74,16 @@ struct SwitchboardService {
 /// Entry point for the switchboard module.
 #[entrypoint]
 #[instrument(name = "switchboard.start")]
-pub async fn start() -> Result<()> {
-    let request_channel = Channel::create(CHANNEL_CAPACITY).await?;
-
-    // Register `Switchboard` as a singleton that can be consumed globally
-    let shared = request_channel.share().await?;
-    singleton::register(SWITCHBOARD_SINGLETON_ID, shared.raw()).await?;
-
-    info!(
-        request_channel = shared.raw(),
-        "switchboard: registered Switchboard singleton"
-    );
-
+pub async fn start(request_channel: u64) -> Result<()> {
+    let request_channel = Channel::attach_shared(SharedChannel::from_raw(request_channel)).await?;
     let mut reader = request_channel.subscribe(REQUEST_CHUNK_SIZE).await?;
+    info!("switchboard: service started");
 
     let mut service = SwitchboardService::new();
 
-    while let Some(frame) = reader.next().await {
-        match frame {
-            Ok(frame) => {
+    loop {
+        match reader.read_next().await {
+            Ok(Some(frame)) => {
                 debug!(
                     len = frame.payload.len(),
                     "switchboard: received request frame"
@@ -109,6 +95,7 @@ pub async fn start() -> Result<()> {
                     warn!(?err, "switchboard: failed to handle request");
                 }
             }
+            Ok(None) => break,
             Err(err) => {
                 warn!(?err, "switchboard: request stream failed");
                 break;
@@ -187,7 +174,7 @@ impl SwitchboardService {
         directions: EndpointDirections,
         updates_channel: u64,
     ) -> Result<(), SwitchboardServiceError> {
-        let updates_channel = unsafe { SharedChannel::from_raw(updates_channel) };
+        let updates_channel = SharedChannel::from_raw(updates_channel);
         let updates_writer = Channel::attach_shared(updates_channel)
             .await?
             .publish_weak()
@@ -229,7 +216,7 @@ impl SwitchboardService {
         channel: u64,
         mode: AdoptMode,
     ) -> Result<(), SwitchboardServiceError> {
-        let updates_channel = unsafe { SharedChannel::from_raw(updates_channel) };
+        let updates_channel = SharedChannel::from_raw(updates_channel);
         let updates_writer = Channel::attach_shared(updates_channel)
             .await?
             .publish_weak()
@@ -257,7 +244,7 @@ impl SwitchboardService {
             },
         );
 
-        let shared = unsafe { SharedChannel::from_raw(channel) };
+        let shared = SharedChannel::from_raw(channel);
         let entry = match self
             .adopt_channel_entry(endpoint_id, directions.output(), shared, mode)
             .await
@@ -300,7 +287,7 @@ impl SwitchboardService {
         to: EndpointId,
         reply_channel: u64,
     ) -> Result<(), SwitchboardServiceError> {
-        let reply_channel = unsafe { SharedChannel::from_raw(reply_channel) };
+        let reply_channel = SharedChannel::from_raw(reply_channel);
 
         if let Err(err) = self.core.add_intent(from, to) {
             self.send_error(reply_channel, request_id, err.into())
@@ -401,7 +388,7 @@ impl SwitchboardService {
             }
         }
 
-        for entry in available {
+        for mut entry in available {
             if entry.retained || !entry.owned {
                 retained.push(entry);
                 continue;
@@ -521,7 +508,7 @@ impl SwitchboardService {
         }
     }
 
-    async fn release_entry(&self, entry: ChannelEntry) {
+    async fn release_entry(&self, mut entry: ChannelEntry) {
         if !entry.owned {
             return;
         }
@@ -541,14 +528,11 @@ impl SwitchboardService {
         });
     }
 
-    async fn run_tap(source: Channel, target: Channel) -> Result<(), DriverError> {
+    async fn run_tap(source: Channel, target: Channel) -> Result<(), ChannelError> {
         let mut reader = source.subscribe_weak(TAP_CHUNK_SIZE).await?;
         let mut writer = target.publish_weak().await?;
-        while let Some(frame) = reader.next().await {
-            match frame {
-                Ok(frame) => writer.send(frame.payload).await?,
-                Err(err) => return Err(err),
-            }
+        while let Some(frame) = reader.read_next().await? {
+            writer.send(frame.payload).await?;
         }
         Ok(())
     }

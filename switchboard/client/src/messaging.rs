@@ -9,9 +9,10 @@ use std::{
 use futures::future::poll_fn;
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use pin_project::pin_project;
-use selium_userland::{
+
+use crate::{
+    channel::ChannelHandle,
     encoding::{FlatMsg, HasSchema},
-    io::ChannelHandle,
 };
 
 use crate::switchboard::{

@@ -3,27 +3,21 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use futures::{SinkExt, StreamExt};
 use selium_atlas_protocol::{
     AtlasId, Message, ProtocolError, decode_message, encode_message,
     uri::{Uri, UriError},
 };
-use selium_userland::{
-    DependencyId, dependency_id, entrypoint,
-    io::{Channel, DriverError, SharedChannel},
-    singleton,
-};
+use selium_switchboard::{Channel, ChannelError, SharedChannel};
+use selium_userland::entrypoint;
 use thiserror::Error;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, instrument, warn};
 
-const ATLAS_SINGLETON_ID: DependencyId = dependency_id!("selium.atlas.singleton");
 const REQUEST_CHUNK_SIZE: u32 = 64 * 1024;
-const CHANNEL_CAPACITY: u32 = 64 * 1024;
 
 #[derive(Debug, Error)]
 enum AtlasServiceError {
-    #[error("driver error: {0}")]
-    Driver(#[from] DriverError),
+    #[error("channel error: {0}")]
+    Channel(#[from] ChannelError),
     #[error("protocol error: {0}")]
     Protocol(#[from] ProtocolError),
     #[error("uri error: {0}")]
@@ -113,7 +107,7 @@ impl AtlasService {
         uri: Uri,
         reply_channel: u64,
     ) -> Result<(), AtlasServiceError> {
-        let reply_channel = unsafe { SharedChannel::from_raw(reply_channel) };
+        let reply_channel = SharedChannel::from_raw(reply_channel);
         let (found, id) = match self.store.get(&uri) {
             Some(id) => (true, id),
             None => (false, 0),
@@ -134,7 +128,7 @@ impl AtlasService {
         id: AtlasId,
         reply_channel: u64,
     ) -> Result<(), AtlasServiceError> {
-        let reply_channel = unsafe { SharedChannel::from_raw(reply_channel) };
+        let reply_channel = SharedChannel::from_raw(reply_channel);
         self.store.insert(uri, id);
         let response = Message::ResponseOk { request_id };
         self.send_response(reply_channel, response).await
@@ -146,7 +140,7 @@ impl AtlasService {
         uri: Uri,
         reply_channel: u64,
     ) -> Result<(), AtlasServiceError> {
-        let reply_channel = unsafe { SharedChannel::from_raw(reply_channel) };
+        let reply_channel = SharedChannel::from_raw(reply_channel);
         let (found, id) = match self.store.remove(&uri) {
             Some(id) => (true, id),
             None => (false, 0),
@@ -166,7 +160,7 @@ impl AtlasService {
         pattern: String,
         reply_channel: u64,
     ) -> Result<(), AtlasServiceError> {
-        let reply_channel = unsafe { SharedChannel::from_raw(reply_channel) };
+        let reply_channel = SharedChannel::from_raw(reply_channel);
 
         match self.store.lookup(&pattern) {
             Ok(ids) => {
@@ -209,40 +203,23 @@ impl AtlasService {
 }
 
 /// Entry point for the Atlas module.
+///
+/// `request_channel` is the shared queue identifier that Atlas will listen on.
 #[entrypoint]
 #[instrument(name = "atlas.start")]
-pub async fn start() -> Result<()> {
-    let request_channel = Channel::create(CHANNEL_CAPACITY).await?;
-
-    // Register `Atlas` as a singleton that can be consumed globally
-    let shared = request_channel.share().await?;
-    singleton::register(ATLAS_SINGLETON_ID, shared.raw()).await?;
-
-    info!(
-        request_channel = shared.raw(),
-        "atlas: registered Atlas singleton"
-    );
-
-    // TODO(@maintainer): Register the shared handle for discovery once the registry path exists.
+pub async fn start(request_channel: u64) -> Result<()> {
+    let request_channel = Channel::attach_shared(SharedChannel::from_raw(request_channel)).await?;
     let mut reader = request_channel.subscribe(REQUEST_CHUNK_SIZE).await?;
 
     let mut service = AtlasService::new();
 
-    while let Some(frame) = reader.next().await {
-        match frame {
-            Ok(frame) => {
-                debug!(len = frame.payload.len(), "atlas: received request frame");
-                if frame.payload.is_empty() {
-                    continue;
-                }
-                if let Err(err) = service.handle_payload(&frame.payload).await {
-                    warn!(?err, "atlas: failed to handle request");
-                }
-            }
-            Err(err) => {
-                warn!(?err, "atlas: request stream failed");
-                break;
-            }
+    while let Some(frame) = reader.read_next().await? {
+        debug!(len = frame.payload.len(), "atlas: received request frame");
+        if frame.payload.is_empty() {
+            continue;
+        }
+        if let Err(err) = service.handle_payload(&frame.payload).await {
+            warn!(?err, "atlas: failed to handle request");
         }
     }
 
